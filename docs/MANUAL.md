@@ -1,5 +1,14 @@
 # GraphSplit manual
 
+## 0. Before you do anything else
+
+To use GraphSplit.jl you must first run DDSync: [https://github.com/eliasrh/DDSync] on your dt.cc data.
+
+See: 
+Elías Rafn Heimisson, Yifan Yu; DDSync: Graph‐Based Denoising of Differential Travel‐Time Observations with Applications to Pick Reconstruction and Path‐Difference Tomography. Seismological Research Letters 2026; doi: [https://doi.org/10.1785/0220260086]
+
+GraphSplit operates directly on the `theta` arrival time potentials produced by DDSync, and not the standard input dt.cc file. This offers huge computational benefits. GraphSplit expects the same input catalog file as DDSync. 
+
 ## 1. What the two stages solve
 
 DDSync represents a kept station–phase observation by a synchronized potential
