@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use GraphSplit in your research, please cite the software using this metadata."
+title: "GraphSplit: Sparse graph relocation from synchronized differential travel times"
+type: software
+authors:
+  - family-names: "Heimisson"
+    given-names: "Elías Rafn"
+    affiliation: "Institute of Earth Sciences, University of Iceland"
+    orcid: "https://orcid.org/0000-0001-8342-7226"
+repository-code: "https://github.com/eliasrh/GraphSplit"
+url: "https://github.com/eliasrh/GraphSplit"
+license: "LicenseRef-GraphSplit-NonCommercial-1.0"
+version: "0.1.3"
+date-released: "2026-08-13"
+keywords:
+  - seismology
+  - earthquake relocation
+  - double difference
+  - graph methods
+  - differential travel times
+  - eikonal equation
+abstract: >
+  GraphSplit is a standard-library-only Julia implementation of sparse,
+  graph-based earthquake relocation from synchronized DDSync theta data. It
+  includes native Cartesian and radial layered-model travel-time builders,
+  robust matrix-free inversion, serial-ID-safe input handling, and TOML-driven
+  reproducible runs.

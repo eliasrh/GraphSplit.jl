@@ -1,0 +1,51 @@
+# Minimal GraphSplit configuration.
+# Paths are resolved relative to this TOML file. Copy this file beside your data.
+
+[io]
+catalog_file = "catalog.txt"
+stations_file = "stations.txt"
+theta_dir = "theta"
+thetastd_dir = "thetastd"
+output_dir = "graphsplit_output"
+
+[travel_time]
+velocity_model_file = "vm.txt"
+table_file = "lookuptable/graphsplit_tt.gstt"
+
+# An existing native table identifies its own geometry. If no table exists,
+# build_geometry selects the native builder: "cartesian" or "radial".
+geometry = "auto"
+build_geometry = "cartesian"
+
+[lookup]
+horizontal_step_m = 125.0
+depth_step_m = 50.0
+station_depth_step_m = 100.0
+
+# Damping keeps weakly resolved events from drifting too far from the current
+# catalog. Increase by factors of 2–10 if the solution moves systematically or
+# implausibly; excessive damping preserves bias in the seed catalog.
+[prelocation]
+damping_lambda = 1.0e-3
+
+[relocation]
+damping_lambda = 5.0e-4
+
+[graph]
+neighbors = 20
+maximum_degree = 30
+metric = "xyz_scaled"
+depth_scale = 0.5
+mutual = true
+maximum_distance_km = 0.0 # 0 disables the radius cap
+
+[observations]
+minimum_theta_degree = 6
+minimum_observations_per_pair = 6
+
+[run]
+prelocation = true
+overwrite = true
+
+# Every available option, including interactions, zero behavior, units, and
+# worked examples, is explained in docs/CONFIGURATION_REFERENCE.md.

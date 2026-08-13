@@ -1,0 +1,243 @@
+# Complete GraphSplit configuration. Every value shown is the built-in default.
+# A normal run should start from graphsplit_template.toml, not this file.
+#
+# Paths are relative to this TOML file. Units are included in key names where
+# practical: _m = metres, _km = kilometres, _ms = metres/second, _s = seconds,
+# and _gib = gibibytes. Full explanations and examples are in
+# docs/CONFIGURATION_REFERENCE.md.
+
+[io]
+# Starting catalog with seed latitude/longitude/depth and a persistent serial ID.
+catalog_file = "catalog.txt"
+# STA lat lon elevation_m, or NET STA lat lon elevation_m.
+stations_file = "stations.txt"
+# DDSync theta_<STA>_<P|S>.txt directory.
+theta_dir = "theta"
+# DDSync std_theta_<STA>_<P|S>.txt directory. Individual files may be absent.
+thetastd_dir = "thetastd"
+# Destination for relocated catalogs and diagnostics.
+output_dir = "graphsplit_output"
+
+[run]
+# Run the theta-reference prelocation before final pair relocation.
+prelocation = true
+# Allow existing primary catalog outputs to be replaced; does not clean the folder.
+overwrite = true
+# Prepare/validate travel times and return without loading theta or relocating.
+build_travel_times_only = false
+
+[catalog]
+# One-based catalog columns; a negative value counts backward from the end.
+latitude_column = 7
+longitude_column = 8
+depth_column = 9
+# -1 is the final column. IDs must be unique positive integers.
+event_id_column = -1
+
+[coordinates]
+# Local x/y origin: stations_mean | catalog_mean | manual.
+reference = "stations_mean"
+# Used only when reference = "manual".
+reference_latitude = 0.0
+reference_longitude = 0.0
+# Radius for geographic-to-local coordinate conversion.
+earth_radius_m = 6371000.0
+# depth_from_elevation uses station z = -elevation; elevation uses input directly.
+station_vertical = "depth_from_elevation"
+# positive_depth | negative_depth | positive_depth_plus_z0.
+event_vertical = "positive_depth"
+# Internal vertical offset used only by positive_depth_plus_z0.
+event_z0_m = 0.0
+
+[travel_time]
+# lookup uses a native layered-model table; constant is mainly for synthetic tests.
+type = "lookup"
+# Native memory-mapped table. MATLAB .mat tables are not accepted.
+table_file = "lookuptable/graphsplit_tt.gstt"
+# Layered depth/Vp/Vs model used to build and validate the lookup table.
+velocity_model_file = "vm.txt"
+# auto reads existing table geometry; explicit cartesian/radial requires a match.
+geometry = "auto"
+# Builder used when geometry=auto and no compatible table exists.
+build_geometry = "cartesian"
+# Build a missing table automatically.
+auto_build = true
+# Rebuild a table whose model, geometry, spacing, radius, or coverage is incompatible.
+auto_rebuild = true
+# Evaluate just-outside points at the nearest boundary. Boundary pile-up is not valid.
+clamp_to_grid = true
+# Used only by type="constant".
+vp_ms = 6000.0
+vs_ms = 3464.0
+# Radial travel-time radius. 0 uses a 4-column model radius, then coordinate radius.
+earth_radius_m = 0.0
+
+[lookup]
+# Range/surface-arc and event-depth spacing. Finer values cost time and disk.
+horizontal_step_m = 125.0
+depth_step_m = 50.0
+# Maximum station-depth slice spacing; must be >= depth_step_m.
+station_depth_step_m = 100.0
+# Table range. 0 derives it from all seed-event/station pairs plus a margin.
+maximum_distance_km = 0.0
+# Shallow table limit. 0 is automatic; a negative value is an explicit limit.
+minimum_depth_km = 0.0
+# Deep table limit. 0 is automatic; a positive value is explicit.
+maximum_depth_km = 0.0
+# Added only to automatic range; at least two horizontal cells are included.
+distance_margin_km = 1.0
+# Added below the deepest seed event by automatic depth selection.
+depth_margin_km = 50.0
+# Fast-sweeping convergence controls for every P/S station-depth slice.
+maximum_sweeps = 32
+sweep_tolerance_s = 1.0e-7
+# Parallelize station-depth slices; Julia must be launched with multiple threads.
+threaded = false
+# Refuse a larger P+S cube unless allow_large_table=true.
+maximum_table_gib = 8.0
+allow_large_table = false
+
+[prelocation]
+# Stage-1 nonlinear iteration bounds.
+max_outer_iterations = 20
+min_outer_iterations = 3
+# pcg is matrix-free production mode; direct is limited to 4,000 free parameters.
+linear_solver = "pcg"
+# block_jacobi (recommended) | diagonal | none.
+preconditioner = "block_jacobi"
+# Relative PCG tolerance and maximum PCG iterations per nonlinear step.
+inner_tolerance = 1.0e-5
+inner_max_iterations = 250
+# Huber threshold in sigma units; lower downweights discordant observations sooner.
+huber_k = 1.345
+# Observation uncertainty floor.
+min_sigma_s = 0.002
+# Fraction of each computed nonlinear update that is applied; (0, 1].
+step_damping = 0.75
+# Spatially effective regularization. Increase to reduce drift; 0 uses a 1e-8 floor.
+damping_lambda = 1.0e-3
+# Stop when both spatial and origin-time RMS steps fall below these thresholds.
+stop_step_rms_m = 0.10
+stop_step_rms_s = 1.0e-4
+# RMS changes below this count as stalls; zero stall iterations disables this rule.
+stop_rms_improvement_s = 1.0e-5
+stop_stall_iterations = 5
+# Per-event emergency step clipping. 0 disables each limit.
+max_event_step_m = 0.0
+max_origin_step_s = 0.0
+# Print one convergence line per nonlinear iteration.
+verbose = true
+
+[relocation]
+# Stage-2 controls have the same meanings as [prelocation].
+max_outer_iterations = 60
+min_outer_iterations = 3
+linear_solver = "pcg"
+preconditioner = "block_jacobi"
+inner_tolerance = 1.0e-4
+inner_max_iterations = 300
+huber_k = 1.345
+min_sigma_s = 0.002
+step_damping = 0.75
+# Increase by factors of 2–10 as a trial if the final solution drifts.
+damping_lambda = 5.0e-4
+stop_step_rms_m = 0.10
+stop_step_rms_s = 1.0e-4
+stop_rms_improvement_s = 1.0e-5
+stop_stall_iterations = 5
+max_event_step_m = 0.0
+max_origin_step_s = 0.0
+verbose = true
+
+[observations]
+# Minimum DDSync thetaStd degree. 0 disables; unavailable without a degree column.
+minimum_theta_degree = 6
+# Maximum combined pair sigma. 0 disables the upper limit.
+maximum_sigma_s = 0.0
+# Station-phase contributions needed to retain one Stage-2 event pair.
+minimum_observations_per_pair = 6
+# Iterative minimum Stage-2 contribution count per event. 0 disables.
+minimum_observations_per_event = 0
+# Minimum Stage-1 star contributions for a non-reference event. 0 disables.
+minimum_star_observations_per_event = 0
+# Reject Stage-2 observations in smaller geometric components. 0 disables.
+minimum_component_size = 0
+
+[gauge]
+# zero_mean | pin.
+mode = "zero_mean"
+# origin_time | xyzt0_scaled | xyzt0. The scaled form can limit common drift.
+zero_mean = "origin_time"
+# Strength of the selected zero-mean constraint; this is not solver damping.
+constraint_weight = 10.0
+# Metres-to-seconds scale used only by xyzt0_scaled.
+reference_velocity_ms = 5000.0
+# Persistent serial IDs, not row numbers. Pin mode requires at least one.
+pin_event_ids = []
+# Any combination of x, y, z, and t0; e.g. xyz, xy, z, or xyzt0.
+pin_fields = "xyz"
+# Optional partial catalog with trusted positions for every pinned ID. Empty uses seed.
+pin_reference_catalog = ""
+
+[graph]
+# Nearest candidate events requested for each event.
+neighbors = 20
+# Base-graph connections allowed per event. <=0 removes the cap.
+maximum_degree = 30
+# xy | xyz | xyz_scaled determines how nearness is measured.
+metric = "xyz_scaled"
+# Depth multiplier used only by xyz_scaled; 0.5 makes 2 km depth count as 1 km.
+depth_scale = 0.5
+# Require each event to choose the other. False keeps a pair chosen by either event.
+mutual = true
+# Maximum distance in the selected metric. 0 disables the radius cap.
+maximum_distance_km = 0.0
+# Try to restore weak events from the same candidate pool. 0 disables.
+minimum_degree = 0
+# Try to bridge components using unused edges from the same candidate pool.
+ensure_connected = false
+# Extra bridge distance limit in the selected metric. 0 adds no extra limit.
+maximum_bridge_distance_km = 0.0
+
+[graph.augmentation]
+# Advanced graph-strengthening pass. Leave off unless diagnostics justify it.
+enabled = false
+# Broader nearest-neighbor pool searched for possible added edges.
+candidate_neighbors = 40
+# Exact catalog-wide target. When enabled, exactly one edge target must be positive.
+add_edges = 0
+# Average added degree/event; edges = ceil(N*value/2). Fractional values are valid.
+add_edges_per_event = 0.0
+# Cap on augmentation edges touching one event, separate from total graph degree.
+maximum_added_per_event = 3
+# Deterministic iterations used to rank graph-strengthening candidates.
+power_iterations = 30
+
+[output]
+# Full prelocation and DD catalogs are always written.
+write_filtered_catalogs = true
+# Write catalog_dd_graphmeta.csv.
+write_graph_metadata = true
+# Write nonlinear and PCG history to solver_history.csv.
+write_solver_history = true
+# Write core counts and final residuals to run_summary.toml.
+write_run_summary = true
+
+# Deliberately omitted from the minimal template. This scan is diagnostic and
+# disabled because applying it has not shown a consistent location benefit.
+[experimental.bias]
+# Fit theta_bias_report.csv after relocation; this does not alter the current run.
+enabled = false
+# Apply rows marked applicable from an earlier report before relocation. Empty disables.
+apply_model_file = ""
+# xy | xyz residual-gradient fit per station-phase group.
+fit_dimensions = "xy"
+# Groups with fewer theta-reference differences are not fitted.
+minimum_observations = 30
+# Robust-fit Huber threshold and uncertainty floor.
+huber_k = 1.345
+minimum_sigma_s = 0.002
+# Robust reweighting limit.
+maximum_irls_iterations = 6
+# Fractional RMS reduction required to mark a fitted row applicable; 0.05 = 5%.
+minimum_improvement_fraction = 0.05
