@@ -53,6 +53,16 @@ nuisance parameters and are not written back to columns 1–6.
 Output preserves the original column count and order, replacing only the three
 location columns. Filtered output preserves the original serial IDs.
 
+With `initialization.mode = "common_centroid"` or `"common_manual"`, the
+latitude, longitude, and depth columns remain syntactically required but are
+overridden as individual in-memory seeds. The serial ID and all preserved
+auxiliary columns are still taken from this file. Output location columns
+contain the relocated results, not the common starting point.
+
+Uncertainty estimates never add columns to a catalog. They are written as
+separate text sidecars keyed by the same persistent `EventID`; their formats
+are described below.
+
 ## Stations
 
 Either form is accepted:
@@ -193,6 +203,10 @@ ID must be exactly 3, 50, or 67. GraphSplit copies the requested latitude,
 longitude, and/or depth into the starting state and then holds those fields
 fixed. It does not import trusted catalog origin time into the internal `t0`.
 
+Without `pin_reference_catalog`, pins remain at the initialized in-memory seed.
+That is normally their `io.catalog_file` location, but under a common
+initialization mode it is the shared centroid or manual point.
+
 ## Native `.gstt` table
 
 The binary format is internal but stable within format version 1. It contains:
@@ -208,6 +222,45 @@ Do not edit the file. GraphSplit rejects unsupported or truncated headers and
 rebuilds incompatible tables when configured to do so. The header remains
 marked incomplete until both P and S cubes have been flushed, so an interrupted
 build cannot be mistaken for a valid table on the next run.
+
+## Uncertainty sidecars
+
+`linerrxyz.txt` is whitespace-separated and contains:
+
+```text
+EventID std_x_m std_y_m std_z_m cov_xx_m2 cov_xy_m2 cov_xz_m2 cov_yy_m2 cov_yz_m2 cov_zz_m2
+```
+
+The x/y axes are local east/north and z follows the configured internal event
+vertical convention. Only events in `catalog_dd_filt.txt` are written.
+
+`booterrxyz.txt` contains one row per filtered ID:
+
+```text
+EventID n_valid valid_fraction center_dx_m lower_dx_m upper_dx_m ... cov_zz_m2
+```
+
+The d-values are local offsets from the all-data `catalog_dd` solution. The
+meaning of lower/upper is recorded in `bootstrap_metadata.toml` and is either a
+central percentile interval or mean plus/minus a selected standard-deviation
+multiple. The six covariance fields are empirical sample covariances in m².
+
+Each wide sample table has this form:
+
+```text
+EventID all_data sample_0001 sample_0002 ... sample_NNNN
+```
+
+The four files hold longitude (degrees), latitude (degrees), depth (km), and
+internal relative origin-time adjustment (s). `NaN` records an inactive event
+or a nonconverged replicate. The first `all_data` value is the ordinary solution
+using every retained station-phase group, not a bootstrap draw.
+
+`bootstrap_block_counts.txt` has one row per resampling block and one integer
+multiplicity per replicate. With station-phase resampling, its label is the
+theta filename; with station resampling, it is the station code. This small file
+records exactly which information was omitted, retained once, or repeated in
+every bootstrap realization.
 
 ## Benchmark truth
 

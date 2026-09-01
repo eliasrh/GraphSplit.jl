@@ -44,6 +44,12 @@ function default_config()
             "depth_column" => 9,
             "event_id_column" => -1,
         ),
+        "initialization" => Dict{String,Any}(
+            "mode" => "catalog",
+            "latitude" => 0.0,
+            "longitude" => 0.0,
+            "depth_km" => 0.0,
+        ),
         "coordinates" => Dict{String,Any}(
             "reference" => "stations_mean",
             "reference_latitude" => 0.0,
@@ -124,6 +130,25 @@ function default_config()
             "write_graph_metadata" => true,
             "write_solver_history" => true,
             "write_run_summary" => true,
+        ),
+        "uncertainty" => Dict{String,Any}(
+            "method" => "none",
+            "linearized" => Dict{String,Any}(
+                "probes" => 12,
+                "seed" => 24680,
+                "inner_tolerance" => 1.0e-3,
+                "inner_max_iterations" => 150,
+            ),
+            "bootstrap" => Dict{String,Any}(
+                "replicates" => 100,
+                "resampling_unit" => "station_phase",
+                "seed" => 12345,
+                "summary_method" => "percentile",
+                "confidence_level" => 0.95,
+                "standard_deviation_multiplier" => 2.0,
+                "write_samples" => true,
+                "write_catalogs" => false,
+            ),
         ),
         "experimental" => Dict{String,Any}(
             "bias" => Dict{String,Any}(
@@ -238,6 +263,20 @@ function validate_config(cfg::Dict{String,Any})
     reference = lowercase(String(cfgget(cfg, "coordinates", "reference")))
     reference in ("stations_mean", "catalog_mean", "manual") ||
         error("coordinates.reference must be stations_mean, catalog_mean, or manual")
+    initialization = lowercase(String(cfgget(cfg, "initialization", "mode")))
+    initialization in ("catalog", "common_centroid", "common_manual") ||
+        error("initialization.mode must be catalog, common_centroid, or common_manual")
+    if initialization != "catalog" && !Bool(cfgget(cfg, "run", "prelocation"; default=true))
+        error("initialization.mode=$initialization requires run.prelocation=true; Stage 1 must separate the common seed before the Stage-2 event graph is built")
+    end
+    initial_latitude = Float64(cfgget(cfg, "initialization", "latitude"))
+    initial_longitude = Float64(cfgget(cfg, "initialization", "longitude"))
+    initial_depth = Float64(cfgget(cfg, "initialization", "depth_km"))
+    isfinite(initial_latitude) && -90.0 <= initial_latitude <= 90.0 ||
+        error("initialization.latitude must be finite and between -90 and 90 degrees")
+    isfinite(initial_longitude) && -180.0 <= initial_longitude <= 180.0 ||
+        error("initialization.longitude must be finite and between -180 and 180 degrees")
+    isfinite(initial_depth) || error("initialization.depth_km must be finite")
     Float64(cfgget(cfg, "coordinates", "earth_radius_m")) > 0.0 || error("coordinates.earth_radius_m must be positive")
     lowercase(String(cfgget(cfg, "coordinates", "station_vertical"))) in ("depth_from_elevation", "elevation") ||
         error("coordinates.station_vertical must be depth_from_elevation or elevation")
@@ -282,6 +321,26 @@ function validate_config(cfg::Dict{String,Any})
         0.0 < Float64(cfgget(cfg, section, "step_damping")) <= 1.0 ||
             error("$section.step_damping must be in (0, 1]")
     end
+    uncertainty_method = lowercase(String(cfgget(cfg, "uncertainty", "method")))
+    uncertainty_method in ("none", "linearized", "bootstrap", "both") ||
+        error("uncertainty.method must be none, linearized, bootstrap, or both")
+    linearized = cfgget(cfg, "uncertainty", "linearized")
+    Int(get(linearized, "probes", 12)) >= 1 || error("uncertainty.linearized.probes must be at least 1")
+    Float64(get(linearized, "inner_tolerance", 1.0e-3)) > 0.0 ||
+        error("uncertainty.linearized.inner_tolerance must be positive")
+    Int(get(linearized, "inner_max_iterations", 150)) >= 1 ||
+        error("uncertainty.linearized.inner_max_iterations must be at least 1")
+    bootstrap = cfgget(cfg, "uncertainty", "bootstrap")
+    Int(get(bootstrap, "replicates", 100)) >= 1 || error("uncertainty.bootstrap.replicates must be at least 1")
+    lowercase(String(get(bootstrap, "resampling_unit", "station_phase"))) in ("station_phase", "station") ||
+        error("uncertainty.bootstrap.resampling_unit must be station_phase or station")
+    summary_method = lowercase(String(get(bootstrap, "summary_method", "percentile")))
+    summary_method in ("percentile", "standard_deviation", "std", "2std") ||
+        error("uncertainty.bootstrap.summary_method must be percentile or standard_deviation")
+    confidence_level = Float64(get(bootstrap, "confidence_level", 0.95))
+    0.0 < confidence_level < 1.0 || error("uncertainty.bootstrap.confidence_level must be between 0 and 1")
+    Float64(get(bootstrap, "standard_deviation_multiplier", 2.0)) > 0.0 ||
+        error("uncertainty.bootstrap.standard_deviation_multiplier must be positive")
     lowercase(String(cfgget(cfg, "experimental", "bias", "fit_dimensions"))) in ("xy", "xyz") ||
         error("experimental.bias.fit_dimensions must be xy or xyz")
     return cfg

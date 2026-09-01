@@ -17,6 +17,12 @@ making the public interface smaller and safer.
 - Primary `catalog_preloc*` and `catalog_dd*` output names.
 - Catalog time fields are preserved rather than modified by relative `t0`.
 - The coherent theta-bias scan is available but experimental and disabled.
+- Regularized randomized inverse-Hessian uncertainty is retained as a separate
+  `linerrxyz.txt` sidecar rather than appended to the catalog.
+- A maintained station-phase block bootstrap preserves every sampled location
+  in wide, serial-ID-keyed tables.
+- Catalog, common-centroid, and manually specified common starting locations
+  provide the HypoDD-style initialization choices without separate runners.
 
 ## Deliberate Julia changes
 
@@ -36,13 +42,14 @@ making the public interface smaller and safer.
 - Trusted pin catalogs must share serial IDs. MATLAB's optional heuristic
   time/location/magnitude matching is not part of the maintained core because
   silent pin mismatches are more damaging than requiring an explicit ID join.
+- Common initialization is validated to require Stage 1, so Stage 2 never
+  constructs a nearest-neighbor graph directly from coincident seeds.
 
 ## Intentionally excluded experimental diagnostics
 
-The MATLAB working tree contains prototype uncertainty, group-influence, SAC,
-and plotting utilities. They are not in the authoritative core release because
-they are not required for relocation, several depend on interpretation choices,
-and including them would enlarge an otherwise standard-library-only API. The
-CSV graph/support diagnostics and experimental bias scan cover the maintained
-diagnostic surface. This is an explicit scope decision, not an accidental
-partial port.
+The MATLAB working tree also contains prototype group-influence, SAC, and
+plotting utilities. Those are not in the authoritative core release because
+they are not required for relocation and several depend on interpretation or
+environment-specific choices. The uncertainty methods are now maintained Julia
+features, with explicit output and interpretation contracts rather than the
+MATLAB prototype's appended catalog columns.

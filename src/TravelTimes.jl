@@ -95,16 +95,25 @@ function great_circle_delta(lat1, lon1, lat2, lon2)
     return atan(sqrt(max(0.0, 1.0 - u * u)), u)
 end
 
-function required_range(stations::Stations, catalog::Catalog, geometry::Symbol, earth_radius_m::Float64)
+function required_range(stations::Stations, catalog::Catalog, state::State,
+        geometry::Symbol, earth_radius_m::Float64)
     maximum = 0.0
     if geometry == :cartesian
         cx, cy = local_xy(catalog.lat, catalog.lon, stations.ref_lat, stations.ref_lon, stations.ref_radius_m)
         for s in eachindex(stations.id), e in eachindex(cx)
             maximum = max(maximum, hypot(cx[e] - stations.x_m[s], cy[e] - stations.y_m[s]))
         end
+        for s in eachindex(stations.id), e in eachindex(state.x)
+            maximum = max(maximum, hypot(state.x[e] - stations.x_m[s], state.y[e] - stations.y_m[s]))
+        end
     else
         for s in eachindex(stations.id), e in eachindex(catalog.lat)
             maximum = max(maximum, earth_radius_m * great_circle_delta(catalog.lat[e], catalog.lon[e], stations.lat[s], stations.lon[s]))
+        end
+        state_lat, state_lon = local_xy_to_ll(state.x, state.y,
+            state.ref_lat, state.ref_lon, state.ref_radius_m)
+        for s in eachindex(stations.id), e in eachindex(state_lat)
+            maximum = max(maximum, earth_radius_m * great_circle_delta(state_lat[e], state_lon[e], stations.lat[s], stations.lon[s]))
         end
     end
     return maximum
@@ -126,7 +135,7 @@ function lookup_grids(cfg::AbstractDict, stations::Stations, catalog::Catalog, s
     dz = Float64(cfgget(cfg, "lookup", "depth_step_m"))
     dzs_requested = Float64(cfgget(cfg, "lookup", "station_depth_step_m"))
     dq_surface > 0.0 && dz > 0.0 && dzs_requested > 0.0 || error("Lookup grid steps must be positive")
-    required = required_range(stations, catalog, geometry, earth_radius_m)
+    required = required_range(stations, catalog, state, geometry, earth_radius_m)
     margin = 1000.0 * Float64(cfgget(cfg, "lookup", "distance_margin_km"; default=1.0))
     configured_max = cfgget(cfg, "lookup", "maximum_distance_km"; default=0.0)
     rmax = auto_number(configured_max, required + max(margin, 2dq_surface); positive=true) *
@@ -311,7 +320,7 @@ function compare_table_coverage(table::TravelTimeTable, cfg::AbstractDict, stati
     intended_radius = travel_time_earth_radius(cfg, model, stations.ref_radius_m)
     abs(intended_radius - table.earth_radius_m) <= 1.0e-10 * intended_radius || return false, "travel-time Earth radius changed"
     abs(stations.ref_radius_m - table.coordinate_radius_m) <= 1.0e-10 * stations.ref_radius_m || return false, "coordinate Earth radius changed"
-    required = required_range(stations, catalog, table.geometry, table.earth_radius_m)
+    required = required_range(stations, catalog, state, table.geometry, table.earth_radius_m)
     qmax_m = table.geometry == :cartesian ? table.q[end] : table.q[end] * table.earth_radius_m
     required <= qmax_m + 1.0e-6 || return false, "distance coverage is too small"
     minimum(stations.z_m) >= table.z[1] - 1.0e-6 && maximum(stations.z_m) <= table.z[end] + 1.0e-6 ||
