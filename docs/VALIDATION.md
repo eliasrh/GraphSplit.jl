@@ -61,6 +61,6 @@ constant-velocity chord time was below `3e-8 s`. An independent evaluation of
 the bundled benchmark seed also produced the smoke-test metrics recorded in the
 benchmark README.
 
-The CI workflow is the authoritative Julia runtime gate before tagging a
-release. Do not remove this note until `Pkg.test()` has passed on an installed
-Julia 1.10+ runtime.
+For v0.2.0, GitHub Actions completed all 315 checks successfully on Julia 1.10
+and the current stable Julia release on 2026-09-01. The two-version CI workflow
+remains the authoritative runtime gate for later changes.
