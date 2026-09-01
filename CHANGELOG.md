@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 — 2026-09-01
+
+- Added an exact fixed-depth constraint for all events or explicit serial-ID
+  subsets, with optional per-event depths from a partial reference catalog.
+- Added a physical minimum-depth constraint using an active-set
+  Gauss-Newton solve that re-solves coupled x/y/t0 updates and releases depth
+  when the next trial points back into the admissible interior.
+- Added an opt-in unconstrained Stage-1 pilot and reflected bounded restart for
+  sparse-station shallow/deep mirror ambiguity; Stage 2 is built only from the
+  bounded restart solution.
+- Extended travel-time-table compatibility checks to cover the physical bound,
+  reflected seed depths, and a configurable forbidden-side pilot margin;
+  clamping is disabled during the branch-search pilot.
+- Added `depth_constraint_status.csv` and bootstrap bound-active fractions
+  without changing any scientific catalog columns.
+- Marked one-sided bound-active linearized z covariance as undefined while
+  retaining conditional x/y covariance; exact fixed depths retain a documented
+  zero conditional z variance.
+- Reorganized the README as a first-user workflow and updated the manual,
+  configuration reference, file formats, examples, parity notes, and tests.
+
 ## 0.2.0 — 2026-09-01
 
 - Added conditional nonlinear block bootstrap uncertainty with station-phase

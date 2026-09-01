@@ -46,6 +46,15 @@ function catalog_depth_to_internal(depth_km, cfg::AbstractDict)
         error("Unknown coordinates.event_vertical: $vertical")
 end
 
+function internal_depth_to_km(value::Real, cfg::AbstractDict)
+    vertical = lowercase(String(cfgget(cfg, "coordinates", "event_vertical"; default="positive_depth")))
+    z0 = Float64(cfgget(cfg, "coordinates", "event_z0_m"; default=0.0))
+    return vertical == "positive_depth" ? Float64(value) / 1000.0 :
+        vertical == "negative_depth" ? -Float64(value) / 1000.0 :
+        vertical == "positive_depth_plus_z0" ? (Float64(value) - z0) / 1000.0 :
+        error("Unknown coordinates.event_vertical: $vertical")
+end
+
 "Attach a reproducible local coordinate frame and return the initial relocation state."
 function attach_coordinates!(stations::Stations, catalog::Catalog, cfg::AbstractDict)
     lat0, lon0 = choose_reference(stations, catalog, cfg)

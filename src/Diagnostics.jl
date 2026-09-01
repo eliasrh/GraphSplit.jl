@@ -123,16 +123,41 @@ function apply_bias_model!(groups::Vector{ThetaGroup}, path::AbstractString, sta
     return groups
 end
 
-function write_solver_history(path::AbstractString, pre::SolveStats, dd::SolveStats)
+function write_solver_history(path::AbstractString, pre::SolveStats, dd::SolveStats;
+        prelocation_pilot::Union{Nothing,SolveStats}=nothing)
     open(path, "w") do io
         println(io, "stage,outer_iteration,robust_rms_s,step_rms_m,step_rms_s,inner_iterations")
-        for (name, stats) in (("prelocation", pre), ("relocation", dd))
+        stages = prelocation_pilot === nothing ? (("prelocation", pre), ("relocation", dd)) :
+            (("prelocation_unconstrained_pilot", prelocation_pilot), ("prelocation", pre), ("relocation", dd))
+        for (name, stats) in stages
             for iteration in 1:stats.iterations
                 @printf(io, "%s,%d,%.12g,%.12g,%.12g,%d\n", name, iteration,
                     stats.rms_s[iteration], stats.step_rms_m[iteration], stats.step_rms_s[iteration], stats.inner_iterations[iteration])
             end
         end
     end
+end
+
+"Write constraint status separately so scientific catalog columns remain unchanged."
+function write_depth_constraint_status(path::AbstractString, catalog::Catalog, state::State,
+        cfg::AbstractDict, pre::SolveStats, dd::SolveStats, reflected::BitVector)
+    bound = depth_bound_mask(state, cfg)
+    fixed, fixed_targets = fixed_depth_targets(state, cfg)
+    selected = bound .| fixed
+    length(reflected) == length(state) || error("Reflected-depth diagnostic length mismatch")
+    open(path, "w") do io
+        println(io, "EventID,bound_applies,fixed_depth,bound_depth_km,fixed_depth_km,reflected_prelocation,bound_hits_prelocation,bound_active_prelocation,bound_hits_relocation,bound_active_relocation,final_depth_km")
+        bound_km = any(bound) ? Float64(get(depth_bound_options(cfg), "minimum_depth_km", 0.0)) : NaN
+        for event in findall(selected)
+            fixed_km = fixed[event] ? internal_depth_to_km(fixed_targets[event], cfg) : NaN
+            @printf(io, "%d,%d,%d,%.12g,%.12g,%d,%d,%d,%d,%d,%.12g\n",
+                catalog.event_id[event], Int(bound[event]), Int(fixed[event]), bound_km, fixed_km,
+                Int(reflected[event]), pre.depth_bound_hits[event], Int(pre.depth_bound_active[event]),
+                dd.depth_bound_hits[event], Int(dd.depth_bound_active[event]),
+                internal_depth_to_km(state.z[event], cfg))
+        end
+    end
+    return path
 end
 
 function write_graph_metadata(path::AbstractString, catalog::Catalog, graph::EventGraph,

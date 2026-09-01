@@ -18,6 +18,8 @@
   unambiguous augmentation/uncertainty validation;
 - common-centroid/manual initialization, its Stage-1 requirement, and lookup
   coverage of overridden manual seeds;
+- exact fixed-depth parameter removal, positive/negative vertical conventions,
+  reflected-depth feasibility, and an active-set crossing/release regression;
 - exact station-phase bootstrap multiplicities, sample quantiles/covariances,
   and serial-ID-keyed uncertainty sidecar formats.
 
@@ -39,9 +41,15 @@ For a new field dataset, validate in this order:
 3. compare Cartesian and radial solutions if aperture makes curvature relevant;
 4. rerun from the first `catalog_dd.txt` with prelocation disabled;
 5. test pins only when their serial IDs and reference locations are trusted;
-6. treat bias-corrected results as an experiment, and retain the uncorrected
+6. if using a physical depth bound, compare an unconstrained diagnostic run,
+   inspect reflected IDs and final bound-active events, and do not interpret a
+   boundary pile-up as depth resolution;
+7. for known-depth explosions, verify fixed IDs/depths in
+   `depth_constraint_status.csv` and remember that their z uncertainty is
+   conditional on the constraint;
+8. treat bias-corrected results as an experiment, and retain the uncorrected
    solution as the baseline.
-7. for a published uncertainty result, inspect bootstrap sample clouds and the
+9. for a published uncertainty result, inspect bootstrap sample clouds and the
    valid-replicate fraction rather than relying only on covariance summaries.
 
 ## Current execution boundary
@@ -63,4 +71,5 @@ benchmark README.
 
 For v0.2.0, GitHub Actions completed all 315 checks successfully on Julia 1.10
 and the current stable Julia release on 2026-09-01. The two-version CI workflow
-remains the authoritative runtime gate for later changes.
+remains the authoritative runtime gate for later changes. The v0.3.0 depth
+constraint tests will enter that runtime gate with the release commit.

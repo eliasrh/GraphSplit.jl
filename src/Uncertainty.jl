@@ -1,6 +1,7 @@
 "Build the final robust, damped normal-equation operator used by uncertainty diagnostics."
 function final_normal_equations(state::State, stations::Stations, obs::Observations,
-        travel_time::AbstractTravelTimeModel, solver_cfg::AbstractDict, cfg::AbstractDict)
+        travel_time::AbstractTravelTimeModel, solver_cfg::AbstractDict, cfg::AbstractDict;
+        depth_bound_active::BitVector=falses(length(state)))
     prediction, gix, giy, giz, gjx, gjy, gjz = predict_and_gradients(state, stations, obs, travel_time)
     residual = obs.dt .- prediction
     minimum_sigma = Float64(get(solver_cfg, "min_sigma_s", 0.002))
@@ -12,7 +13,11 @@ function final_normal_equations(state::State, stations::Stations, obs::Observati
     system = LinearizedSystem(obs.i, obs.j, gix, giy, giz, gjx, gjy, gjz, sqrt_weight, n,
         gauge_definition(cfg), Float64(cfgget(cfg, "gauge", "constraint_weight"; default=10.0)),
         Float64(cfgget(cfg, "gauge", "reference_velocity_ms"; default=5000.0)))
-    active = pinned_active_mask(state, cfg)
+    length(depth_bound_active) == n || error("Depth-bound active-mask length mismatch")
+    active = parameter_active_mask(state, cfg)
+    for event in findall(depth_bound_active)
+        active[2n + event] = false
+    end
     damping = max(Float64(get(solver_cfg, "damping_lambda", 0.0)), 1.0e-8)
     operator = function (vector::Vector{Float64})
         work = copy(vector)
@@ -28,7 +33,8 @@ end
 
 "Estimate spatial blocks of the regularized inverse Hessian with block Hutchinson probes."
 function estimate_linearized_uncertainty(state::State, stations::Stations, obs::Observations,
-        travel_time::AbstractTravelTimeModel, event_mask::AbstractVector{Bool}, cfg::AbstractDict)
+        travel_time::AbstractTravelTimeModel, event_mask::AbstractVector{Bool}, cfg::AbstractDict;
+        depth_bound_active::BitVector=falses(length(state)))
     length(event_mask) == length(state) || error("Linearized uncertainty event-mask length mismatch")
     options = cfgget(cfg, "uncertainty", "linearized")
     probes = Int(get(options, "probes", 12))
@@ -36,7 +42,7 @@ function estimate_linearized_uncertainty(state::State, stations::Stations, obs::
     tolerance = Float64(get(options, "inner_tolerance", 1.0e-3))
     maximum_iterations = Int(get(options, "inner_max_iterations", 150))
     system, operator, apply_prec, active = final_normal_equations(state, stations, obs,
-        travel_time, cfg["relocation"], cfg)
+        travel_time, cfg["relocation"], cfg; depth_bound_active=depth_bound_active)
     n = length(state)
     accumulated = zeros(3, 3, n)
     successful_by_axis = zeros(Int, 3)
@@ -80,6 +86,10 @@ function estimate_linearized_uncertainty(state::State, stations::Stations, obs::
         decomposition = eigen(Symmetric(block))
         values = max.(decomposition.values, 0.0)
         covariance[:, :, event] .= decomposition.vectors * Diagonal(values) * decomposition.vectors'
+        if depth_bound_active[event]
+            covariance[3, :, event] .= NaN
+            covariance[:, 3, event] .= NaN
+        end
     end
     @printf("Linearized uncertainty: %d/%d randomized solves converged\n",
         sum(successful_by_axis), 3probes)
@@ -197,15 +207,6 @@ function create_bootstrap_store(output::AbstractString, rows::Int, replicates::I
     z = Mmap.mmap(io, Array{Float64,2}, dims, 2bytes_per_field)
     t0 = Mmap.mmap(io, Array{Float64,2}, dims, 3bytes_per_field)
     return (path=path, io=io, x=x, y=y, z=z, t0=t0)
-end
-
-function internal_depth_to_km(value::Float64, cfg::AbstractDict)
-    vertical = lowercase(String(cfgget(cfg, "coordinates", "event_vertical"; default="positive_depth")))
-    z0 = Float64(cfgget(cfg, "coordinates", "event_z0_m"; default=0.0))
-    return vertical == "positive_depth" ? value / 1000.0 :
-        vertical == "negative_depth" ? -value / 1000.0 :
-        vertical == "positive_depth_plus_z0" ? (value - z0) / 1000.0 :
-        error("Unknown coordinates.event_vertical: $vertical")
 end
 
 function write_bootstrap_sample_tables(output::AbstractString, catalog::Catalog, nominal::State,
@@ -356,6 +357,8 @@ function run_bootstrap_uncertainty(catalog::Catalog, groups::Vector{ThetaGroup},
     replicate_iterations = zeros(Int, replicates)
     replicate_active = zeros(Int, replicates)
     replicate_unique_blocks = zeros(Int, replicates)
+    valid_depth_samples = zeros(Int, length(selected_rows))
+    active_depth_bound_samples = zeros(Int, length(selected_rows))
     block_counts = zeros(Int32, length(labels), replicates)
     catalog_directory = joinpath(output, "bootstrap_catalogs")
     write_catalogs && mkpath(catalog_directory)
@@ -383,6 +386,8 @@ function run_bootstrap_uncertainty(catalog::Catalog, groups::Vector{ThetaGroup},
                     samples.y[sample_row, replicate] = state.y[event]
                     samples.z[sample_row, replicate] = state.z[event]
                     samples.t0[sample_row, replicate] = state.t0[event]
+                    valid_depth_samples[sample_row] += 1
+                    stats.depth_bound_active[event] && (active_depth_bound_samples[sample_row] += 1)
                 end
                 if write_catalogs
                     mask = event_mask .& active_events
@@ -421,6 +426,17 @@ function run_bootstrap_uncertainty(catalog::Catalog, groups::Vector{ThetaGroup},
                 println(io)
             end
         end
+        if Bool(get(depth_bound_options(cfg), "enabled", false))
+            open(joinpath(output, "bootstrap_depth_bound_status.txt"), "w") do io
+                println(io, "EventID n_valid n_bound_active bound_active_fraction")
+                for (sample_row, event) in enumerate(selected_rows)
+                    valid = valid_depth_samples[sample_row]
+                    fraction = valid > 0 ? active_depth_bound_samples[sample_row] / valid : NaN
+                    @printf(io, "%d %d %d %.12g\n", catalog.event_id[event], valid,
+                        active_depth_bound_samples[sample_row], fraction)
+                end
+            end
+        end
         metadata = Dict{String,Any}(
             "method" => "conditional_stage2_block_bootstrap",
             "resampling_unit" => unit,
@@ -435,6 +451,7 @@ function run_bootstrap_uncertainty(catalog::Catalog, groups::Vector{ThetaGroup},
             "summary_method" => String(get(options, "summary_method", "percentile")),
             "confidence_level" => Float64(get(options, "confidence_level", 0.95)),
             "standard_deviation_multiplier" => Float64(get(options, "standard_deviation_multiplier", 2.0)),
+            "depth_bound_enabled" => Bool(get(depth_bound_options(cfg), "enabled", false)),
         )
         open(joinpath(output, "bootstrap_metadata.toml"), "w") do io
             TOML.print(io, metadata; sorted=true)

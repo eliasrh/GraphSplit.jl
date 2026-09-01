@@ -228,7 +228,82 @@ parameters. Use PCG for production. Step clipping is disabled by default;
 `max_event_step_m` and `max_origin_step_s` are emergency safeguards rather than
 a convergence strategy.
 
-## 8. Recommended two-pass workflow
+## 8. Physical depth bounds and exact fixed depths
+
+Sparse stations at similar elevation can leave a real shallow/deep ambiguity.
+In a locally homogeneous approximation,
+
+```text
+T_k ≈ sqrt(horizontal_range_k^2 + (z - station_z_k)^2) / velocity.
+```
+
+When all station depths are similar, reflecting `z` about their plane changes
+travel times very little. Double differences can preserve this ambiguity while
+still resolving a coherent relative structure. A graph cannot create the
+missing vertical information; an external physical constraint is appropriate
+when events are known not to occur above a surface or mine bench.
+
+### Active no-cross bound
+
+`constraints.depth_bound` imposes a minimum catalog depth. In the default
+positive-down convention, a value of `-0.8` km means no event may become
+shallower than 800 m elevation.
+
+The bound is enforced inside the Gauss-Newton step. GraphSplit first calculates
+a trial update. For any event that would cross, it fixes that iteration's z
+update at the boundary and re-solves the coupled x/y/t0 update. The event is
+released on a later iteration when its unconstrained direction points back
+into the admissible interior. Thus each active-set subproblem uses the ordinary
+linearization; there is no discontinuous per-step bounce.
+
+An event that remains on the boundary is unresolved in the outward depth
+direction. The boundary is a physical prior, not a measured hypocentral depth.
+Interpret boundary concentrations using `depth_constraint_status.csv` and the
+bootstrap bound-active fraction.
+
+Do not use `lookup.minimum_depth_km` as a no-cross setting. It only defines the
+travel-time grid. Likewise, `travel_time.clamp_to_grid` prevents an immediate
+lookup failure but gives zero derivative outside the grid; it is not a model
+constraint. A compatible table must contain the physical boundary.
+
+### Explicit reflected Stage-1 restart
+
+When `reflected_prelocation_restart = true`, GraphSplit performs a documented
+two-branch search:
+
+1. run an unconstrained Stage-1 pilot;
+2. identify selected events on the forbidden side;
+3. reflect those depths about the median station-depth plane or a manual plane;
+4. rerun Stage 1 with the active physical bound;
+5. construct the Stage-2 graph from the bounded solution.
+
+This is intentionally opt-in. The solver records the pilot in
+`solver_history.csv` when a restart occurs and marks every reflected serial ID
+in `depth_constraint_status.csv`. If the configured mirror plane does not put
+an event inside the physical domain, the run stops instead of silently moving
+it to the boundary. An automatically built lookup table reserves
+`pilot_shallow_margin_km` (10 km by default) on the forbidden side. Table
+clamping is disabled for the pilot: if the search exceeds that range, increase
+the margin and rebuild rather than accepting a zero out-of-grid depth gradient.
+
+### Exact fixed depth
+
+`constraints.fixed_depth` removes selected z parameters from every solve while
+leaving x, y, and relative origin time free. This is the appropriate treatment
+for explosions whose surface or bench depth is known independently. It is an
+exact equality constraint and does not damage the linearization; it makes the
+model smaller.
+
+The constraint can apply to all events, an explicit serial-ID subset, or use a
+partial reference catalog to supply different known depths. Do not also pin z
+for the same IDs through `[gauge]`; GraphSplit rejects the duplicate constraint.
+
+In uncertainty output, fixed-depth zero variance is conditional on the imposed
+depth. For an event active at the one-sided bound, the linearized z variance is
+written as `NaN` because a symmetric Gaussian approximation is misleading.
+Bootstrap samples remain the preferred depth-stability diagnostic.
+
+## 9. Recommended two-pass workflow
 
 A second run is simply another GraphSplit invocation. It does not need special
 code.
@@ -273,7 +348,7 @@ This uses the first relocation as the seed, avoids repeating Stage 1, and lets
 the local graph contract around improved hypocenters. The numerical values are
 a starting schedule, not universal defaults.
 
-## 9. Uncertainty estimates
+## 10. Uncertainty estimates
 
 Uncertainty output is deliberately separate from the four location catalogs.
 This keeps `catalog_dd.txt` compatible with DDSync/HypoDD-style workflows and
@@ -307,6 +382,9 @@ per-replicate catalogs contain only events active in that realization.
 It reports valid-sample counts, central offsets and bounds, and all six unique
 covariance terms. Bounds may be central percentiles or mean ± a selected number
 of standard deviations. Always inspect sample clouds for important events.
+When a physical depth bound is enabled, `bootstrap_depth_bound_status.txt`
+reports how many valid realizations ended at the bound for each event. A high
+fraction means the empirical depth distribution is truncated by the prior.
 
 ### Regularized linearized uncertainty
 
@@ -329,7 +407,7 @@ bootstrap also conditions on DDSync's theta estimates. A complete end-to-end
 bootstrap would start from the original differential-time observations and
 rerun both DDSync and GraphSplit.
 
-## 10. Experimental bias workflow
+## 11. Experimental bias workflow
 
 `experimental.bias.enabled = true` writes `theta_bias_report.csv`. For each
 station–phase group with enough observations, it robustly fits a no-intercept
@@ -341,7 +419,7 @@ Nothing is applied during the scan run. To test a reviewed report, set
 design prevents an exploratory correction from silently changing the primary
 solution.
 
-## 11. Reading the diagnostics
+## 12. Reading the diagnostics
 
 Check `solver_history.csv` for decreasing robust RMS and spatial steps. A PCG
 warning means the outer step used the best available inner iterate, not that the
@@ -353,7 +431,13 @@ DD pair degree and raw observation count. Events missing from
 `catalog_dd_filt.txt` remain in the full catalog unchanged or weakly constrained
 but did not participate in the retained DD system.
 
-## 12. Reproducibility checklist
+`depth_constraint_status.csv` identifies the events in each depth-constraint
+scope, their imposed depth, reflected-restart status, active-set hit counts,
+and whether their final Stage-1 or Stage-2 solution is on the bound. Keep this
+sidecar with any constrained catalog so a fixed or boundary depth is never
+mistaken for unconstrained resolution.
+
+## 13. Reproducibility checklist
 
 Archive the TOML, input catalog, station and velocity files, DDSync output,
 native table header/model file, `run_summary.toml`, graph metadata, and solver

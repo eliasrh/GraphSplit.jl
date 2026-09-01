@@ -103,6 +103,8 @@ struct SolveStats
     step_rms_s::Vector{Float64}
     inner_iterations::Vector{Int}
     converged::Bool
+    depth_bound_hits::Vector{Int}
+    depth_bound_active::BitVector
 end
 
 abstract type AbstractTravelTimeModel end

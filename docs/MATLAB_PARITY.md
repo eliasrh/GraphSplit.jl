@@ -44,6 +44,14 @@ making the public interface smaller and safer.
   silent pin mismatches are more damaging than requiring an explicit ID join.
 - Common initialization is validated to require Stage 1, so Stage 2 never
   constructs a nearest-neighbor graph directly from coincident seeds.
+- Physical minimum depth uses an active-set Gauss-Newton update rather than
+  travel-time-table clamping. An explicit reflected Stage-1 restart can search
+  the admissible counterpart of a sparse-network mirror solution before graph
+  construction.
+- Exact fixed-depth constraints may apply to all events or serial-ID subsets
+  independently of the gauge; x, y, and relative origin time remain free.
+- Constraint status and bootstrap bound-active fractions are separate
+  serial-ID-keyed sidecars, preserving the primary catalog format.
 
 ## Intentionally excluded experimental diagnostics
 

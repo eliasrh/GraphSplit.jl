@@ -107,6 +107,30 @@ end
         @test GraphSplit.validate_config(cfg) === cfg
         cfg["initialization"]["mode"] = "one_event"
         @test_throws ErrorException GraphSplit.validate_config(cfg)
+
+        cfg = GraphSplit.default_config()
+        cfg["constraints"]["depth_bound"]["enabled"] = true
+        cfg["constraints"]["depth_bound"]["minimum_depth_km"] = -0.8
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["constraints"]["depth_bound"]["scope"] = "event_ids"
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["constraints"]["depth_bound"]["event_ids"] = [10, 20]
+        cfg["constraints"]["depth_bound"]["reflected_prelocation_restart"] = true
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["constraints"]["depth_bound"]["pilot_shallow_margin_km"] = -1.0
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["constraints"]["depth_bound"]["pilot_shallow_margin_km"] = 10.0
+        cfg["run"]["prelocation"] = false
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+
+        cfg = GraphSplit.default_config()
+        cfg["constraints"]["fixed_depth"]["enabled"] = true
+        cfg["constraints"]["fixed_depth"]["scope"] = "all"
+        cfg["constraints"]["fixed_depth"]["event_ids"] = [10]
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["constraints"]["fixed_depth"]["event_ids"] = Int[]
+        cfg["constraints"]["fixed_depth"]["depth_km"] = -0.8
+        @test GraphSplit.validate_config(cfg) === cfg
     end
 
     @testset "coordinates" begin
@@ -166,6 +190,80 @@ end
         manual_range = GraphSplit.required_range(stations, catalog, manual_state, :cartesian, 6_371_000.0)
         @test manual_range > original_range
         @test manual_range >= 200_000.0
+    end
+
+    @testset "depth constraints" begin
+        ids = Int64[10, 20, 30]
+        state = GraphSplit.State(ids, zeros(3), zeros(3), [1000.0, 2000.0, 3000.0],
+            zeros(3), 36.0, -117.0, 6_371_000.0)
+        stations = GraphSplit.Stations(["STA", "STB"], [36.0, 36.1], [-117.0, -117.1],
+            [800.0, 600.0], zeros(2), zeros(2), [-800.0, -600.0],
+            36.0, -117.0, 6_371_000.0)
+
+        cfg = GraphSplit.default_config()
+        fixed = cfg["constraints"]["fixed_depth"]
+        fixed["enabled"] = true
+        fixed["scope"] = "event_ids"
+        fixed["event_ids"] = [20]
+        fixed["depth_km"] = -0.8
+        GraphSplit.apply_fixed_depth_constraints!(state, cfg)
+        @test state.z == [1000.0, -800.0, 3000.0]
+        active = GraphSplit.parameter_active_mask(state, cfg)
+        @test !active[2length(state) + 2]
+        @test active[2length(state) + 1]
+
+        fixed["enabled"] = false
+        bound = cfg["constraints"]["depth_bound"]
+        bound["enabled"] = true
+        bound["minimum_depth_km"] = -0.8
+        bound["scope"] = "all"
+        bound["reflected_prelocation_restart"] = true
+        bound["mirror_plane"] = "manual"
+        bound["mirror_depth_km"] = -0.8
+        state.z .= [-1200.0, 0.0, 3000.0]
+        reflected = GraphSplit.reflect_depth_violations!(state, stations, cfg)
+        @test reflected == BitVector([true, false, false])
+        @test state.z[1] == -400.0
+        @test !any(GraphSplit.depth_bound_violation_mask(state, cfg))
+        @test -10_800.0 in GraphSplit.constraint_required_depths(state, stations, cfg)
+
+        cfg["coordinates"]["event_vertical"] = "negative_depth"
+        bound["minimum_depth_km"] = 1.0
+        state.z .= [-500.0, -1500.0, -2000.0]
+        @test GraphSplit.depth_bound_violation_mask(state, cfg) == BitVector([true, false, false])
+
+        cfg = GraphSplit.default_config()
+        bound = cfg["constraints"]["depth_bound"]
+        bound["enabled"] = true
+        bound["minimum_depth_km"] = 0.0
+        bound["scope"] = "event_ids"
+        bound["event_ids"] = [2]
+        linear_state = GraphSplit.State(Int64[1, 2], zeros(2), zeros(2), [1.0, 1.0],
+            zeros(2), 0.0, 0.0, 6_371_000.0)
+        system = GraphSplit.LinearizedSystem(Int32[1], Int32[2], [0.0], [0.0], [0.0],
+            [0.0], [0.0], [-1.0], [1.0], 2, :none, 1.0, 5000.0)
+        rhs_outward = GraphSplit.apply_At(system, [-2.0])
+        base_active = falses(8)
+        base_active[6] = true
+        solver_cfg = deepcopy(cfg["relocation"])
+        solver_cfg["step_damping"] = 1.0
+        update, _, converged, engaged, contact = GraphSplit.solve_model_update(system,
+            rhs_outward, 1.0e-8, linear_state, solver_cfg, cfg, base_active,
+            "diagonal", "direct", 1.0e-12, 20)
+        @test converged
+        @test update[6] ≈ -1.0 atol=1.0e-10
+        @test engaged == BitVector([false, true])
+        @test contact == BitVector([false, true])
+
+        linear_state.z[2] = 0.0
+        rhs_inward = GraphSplit.apply_At(system, [2.0])
+        update, _, converged, engaged, contact = GraphSplit.solve_model_update(system,
+            rhs_inward, 1.0e-8, linear_state, solver_cfg, cfg, base_active,
+            "diagonal", "direct", 1.0e-12, 20)
+        @test converged
+        @test update[6] > 0.0
+        @test !any(engaged)
+        @test !any(contact)
     end
 
     @testset "exact k-d tree" begin

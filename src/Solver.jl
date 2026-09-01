@@ -112,25 +112,31 @@ function apply_At(system::LinearizedSystem, data::Vector{Float64})
     return output
 end
 
-function pinned_active_mask(state::State, cfg::AbstractDict)
+function parameter_active_mask(state::State, cfg::AbstractDict)
     active = trues(4length(state))
-    lowercase(String(cfgget(cfg, "gauge", "mode"; default="zero_mean"))) == "pin" || return active
-    pin_ids = Int64.(cfgget(cfg, "gauge", "pin_event_ids"; default=Int[]))
-    isempty(pin_ids) && error("gauge.mode=pin requires at least one gauge.pin_event_ids entry")
-    event_rows = Dict(id => row for (row, id) in enumerate(state.event_id))
-    missing = setdiff(pin_ids, state.event_id)
-    isempty(missing) || error("Pinned event IDs were not found in the catalog: $(join(missing, ','))")
-    fields = lowercase(String(cfgget(cfg, "gauge", "pin_fields"; default="xyz")))
     n = length(state)
-    for id in pin_ids
-        row = event_rows[id]
-        occursin('x', fields) && (active[row] = false)
-        occursin('y', fields) && (active[n + row] = false)
-        occursin('z', fields) && (active[2n + row] = false)
-        (occursin("t0", fields) || fields == "t") && (active[3n + row] = false)
+    if lowercase(String(cfgget(cfg, "gauge", "mode"; default="zero_mean"))) == "pin"
+        pin_ids = Int64.(cfgget(cfg, "gauge", "pin_event_ids"; default=Int[]))
+        isempty(pin_ids) && error("gauge.mode=pin requires at least one gauge.pin_event_ids entry")
+        event_rows = Dict(id => row for (row, id) in enumerate(state.event_id))
+        missing = setdiff(pin_ids, state.event_id)
+        isempty(missing) || error("Pinned event IDs were not found in the catalog: $(join(missing, ','))")
+        fields = lowercase(String(cfgget(cfg, "gauge", "pin_fields"; default="xyz")))
+        for id in pin_ids
+            row = event_rows[id]
+            occursin('x', fields) && (active[row] = false)
+            occursin('y', fields) && (active[n + row] = false)
+            occursin('z', fields) && (active[2n + row] = false)
+            (occursin("t0", fields) || fields == "t") && (active[3n + row] = false)
+        end
+    end
+    for event in findall(fixed_depth_mask(state, cfg))
+        active[2n + event] = false
     end
     return active
 end
+
+pinned_active_mask(state::State, cfg::AbstractDict) = parameter_active_mask(state, cfg)
 
 function block_jacobi(system::LinearizedSystem, damping::Float64, active::BitVector)
     n = system.n_events
@@ -227,6 +233,7 @@ end
 function direct_solve(operator, right_hand_side::Vector{Float64}, active::BitVector)
     free = findall(active)
     length(free) <= 4000 || error("The dependency-free direct solver is limited to 4000 free parameters; use PCG")
+    isempty(free) && return zeros(length(right_hand_side)), 0, true
     matrix = Matrix{Float64}(undef, length(free), length(free))
     basis = zeros(length(right_hand_side))
     for (column, index) in enumerate(free)
@@ -257,25 +264,109 @@ function apply_step_limits!(update::Vector{Float64}, n::Int, solver_cfg::Abstrac
     return update
 end
 
+function raw_normal_operator(system::LinearizedSystem, damping::Float64, vector::Vector{Float64})
+    return apply_At(system, apply_A(system, vector)) .+ damping .* vector
+end
+
+"Solve one equality-constrained linearized update around a known fixed update."
+function solve_reduced_update(system::LinearizedSystem, rhs::Vector{Float64}, damping::Float64,
+        active::BitVector, fixed_update::Vector{Float64}, preconditioner_name::String,
+        linear_solver::String, inner_tolerance::Float64, inner_maximum::Int)
+    effective_rhs = rhs .- raw_normal_operator(system, damping, fixed_update)
+    effective_rhs[.!active] .= 0.0
+    operator = function (vector::Vector{Float64})
+        work = copy(vector)
+        work[.!active] .= 0.0
+        result = raw_normal_operator(system, damping, work)
+        result[.!active] .= vector[.!active]
+        return result
+    end
+    apply_prec = preconditioner(system, damping, active, preconditioner_name)
+    if linear_solver == "direct"
+        correction, iterations, converged = direct_solve(operator, effective_rhs, active)
+    else
+        correction, iterations, converged = pcg(operator, effective_rhs, apply_prec;
+            tolerance=inner_tolerance, maximum_iterations=inner_maximum)
+    end
+    return fixed_update .+ correction, iterations, converged
+end
+
+"Solve and apply the active-set lower-depth bound to one Gauss-Newton update."
+function solve_model_update(system::LinearizedSystem, rhs::Vector{Float64}, damping::Float64,
+        state::State, solver_cfg::AbstractDict, cfg::AbstractDict, base_active::BitVector,
+        preconditioner_name::String, linear_solver::String, inner_tolerance::Float64,
+        inner_maximum::Int)
+    n = length(state)
+    step_damping = Float64(get(solver_cfg, "step_damping", 1.0))
+    active = copy(base_active)
+    fixed_raw_update = zeros(4n)
+    bound_scope = depth_bound_mask(state, cfg)
+    boundary = any(bound_scope) ? depth_bound_internal(cfg) : 0.0
+    direction = internal_depth_direction(cfg)
+    initial_violations = depth_bound_violation_mask(state, cfg)
+    any(initial_violations) && error("Bounded relocation requires a feasible starting state; violating EventIDs: $(join(state.event_id[findall(initial_violations)], ','))")
+    engaged = falses(n)
+    total_iterations = 0
+    all_converged = true
+    maximum_passes = count(bound_scope) + 1
+    for pass in 1:maximum_passes
+        raw_update, inner_iterations, converged = solve_reduced_update(system, rhs, damping,
+            active, fixed_raw_update, preconditioner_name, linear_solver,
+            inner_tolerance, inner_maximum)
+        total_iterations += inner_iterations
+        all_converged &= converged
+        applied_update = step_damping .* raw_update
+        apply_step_limits!(applied_update, n, solver_cfg)
+        applied_update[.!base_active] .= 0.0
+        violations = falses(n)
+        for event in 1:n
+            z_index = 2n + event
+            bound_scope[event] && base_active[z_index] || continue
+            candidate = state.z[event] + applied_update[z_index]
+            depth_is_feasible(candidate, boundary, direction) || (violations[event] = true)
+        end
+        if !any(violations)
+            contact = falses(n)
+            for event in findall(engaged)
+                contact[event] = abs(direction * (state.z[event] + applied_update[2n + event] - boundary)) <= 1.0e-5
+            end
+            return applied_update, total_iterations, all_converged, engaged, contact
+        end
+        new_violations = violations .& .!engaged
+        any(new_violations) || error("Depth-bound active set failed to obtain a feasible update")
+        for event in findall(new_violations)
+            z_index = 2n + event
+            active[z_index] = false
+            fixed_raw_update[z_index] = (boundary - state.z[event]) / step_damping
+            engaged[event] = true
+        end
+    end
+    error("Depth-bound active set exceeded its finite-pass limit")
+end
+
 "Robust matrix-free Gauss-Newton/IRLS relocation for either stage."
 function solve_relocation(initial::State, stations::Stations, obs::Observations,
         travel_time::AbstractTravelTimeModel, solver_cfg::AbstractDict, cfg::AbstractDict)
-    isempty(obs) && return copy_state(initial), SolveStats(0, Float64[], Float64[], Float64[], Int[], true)
     state = copy_state(initial)
     n = length(state)
-    active = pinned_active_mask(state, cfg)
+    initial_violations = depth_bound_violation_mask(state, cfg)
+    any(initial_violations) && error("Bounded relocation requires feasible initial depths for EventIDs $(join(state.event_id[findall(initial_violations)], ','))")
+    isempty(obs) && return state, SolveStats(0, Float64[], Float64[], Float64[], Int[], true,
+        zeros(Int, n), falses(n))
+    base_active = parameter_active_mask(state, cfg)
     maximum_outer = Int(get(solver_cfg, "max_outer_iterations", 20))
     minimum_outer = Int(get(solver_cfg, "min_outer_iterations", 3))
     minimum_sigma = Float64(get(solver_cfg, "min_sigma_s", 0.002))
     huber_k = Float64(get(solver_cfg, "huber_k", 1.345))
     damping = max(Float64(get(solver_cfg, "damping_lambda", 0.0)), 1.0e-8)
-    step_damping = Float64(get(solver_cfg, "step_damping", 1.0))
     inner_tolerance = Float64(get(solver_cfg, "inner_tolerance", 1.0e-5))
     inner_maximum = Int(get(solver_cfg, "inner_max_iterations", 250))
     preconditioner_name = lowercase(String(get(solver_cfg, "preconditioner", "block_jacobi")))
     linear_solver = lowercase(String(get(solver_cfg, "linear_solver", "pcg")))
     rms_history, spatial_history, time_history = Float64[], Float64[], Float64[]
     inner_history = Int[]
+    depth_bound_hits = zeros(Int, n)
+    final_depth_bound_active = falses(n)
     stall = 0
     converged = false
     for iteration in 1:maximum_outer
@@ -290,32 +381,22 @@ function solve_relocation(initial::State, stations::Stations, obs::Observations,
             Float64(cfgget(cfg, "gauge", "reference_velocity_ms"; default=5000.0)))
         data = vcat(sqrt_weight .* residual, zeros(gauge_rows(system)))
         rhs = apply_At(system, data)
-        rhs[.!active] .= 0.0
-        operator = function (vector::Vector{Float64})
-            work = copy(vector); work[.!active] .= 0.0
-            result = apply_At(system, apply_A(system, work)) .+ damping .* work
-            result[.!active] .= vector[.!active]
-            return result
-        end
-        apply_prec = preconditioner(system, damping, active, preconditioner_name)
-        if linear_solver == "direct"
-            update, inner_iterations, inner_converged = direct_solve(operator, rhs, active)
-        else
-            update, inner_iterations, inner_converged = pcg(operator, rhs, apply_prec;
-                tolerance=inner_tolerance, maximum_iterations=inner_maximum)
-        end
+        rhs[.!base_active] .= 0.0
+        update, inner_iterations, inner_converged, bound_engaged, bound_contact =
+            solve_model_update(system, rhs, damping, state, solver_cfg, cfg, base_active,
+                preconditioner_name, linear_solver, inner_tolerance, inner_maximum)
+        depth_bound_hits .+= Int.(bound_engaged)
+        final_depth_bound_active .= bound_contact
         if !inner_converged
             @warn @sprintf("Inner linear solve did not converge at outer iteration %d after %d inner iterations",
                 iteration, inner_iterations)
         end
-        update .*= step_damping
-        apply_step_limits!(update, n, solver_cfg)
-        update[.!active] .= 0.0
         dx = view(update, 1:n)
         dy = view(update, n + 1:2n)
         dz = view(update, 2n + 1:3n)
         dt = view(update, 3n + 1:4n)
         state.x .+= dx; state.y .+= dy; state.z .+= dz; state.t0 .+= dt
+        any(bound_contact) && (state.z[bound_contact] .= depth_bound_internal(cfg))
         if gauge_definition(cfg) == :origin_time
             state.t0 .-= sum(state.t0) / n
         end
@@ -325,6 +406,9 @@ function solve_relocation(initial::State, stations::Stations, obs::Observations,
         push!(rms_history, robust_rms); push!(spatial_history, spatial_rms); push!(time_history, time_rms); push!(inner_history, inner_iterations)
         Bool(get(solver_cfg, "verbose", true)) && @printf("  iter %3d: robust RMS %.6f s; step RMS %.3f m, %.3f ms; PCG %d\n",
             iteration, robust_rms, spatial_rms, 1000 * time_rms, inner_iterations)
+        Bool(get(solver_cfg, "verbose", true)) && any(bound_engaged) &&
+            @printf("             depth bound engaged for %d events (%d at boundary after step limiting)\n",
+                count(bound_engaged), count(bound_contact))
         if iteration >= minimum_outer
             small_step = spatial_rms <= Float64(get(solver_cfg, "stop_step_rms_m", 0.1)) &&
                 time_rms <= Float64(get(solver_cfg, "stop_step_rms_s", 1.0e-4))
@@ -343,5 +427,6 @@ function solve_relocation(initial::State, stations::Stations, obs::Observations,
             end
         end
     end
-    return state, SolveStats(length(rms_history), rms_history, spatial_history, time_history, inner_history, converged)
+    return state, SolveStats(length(rms_history), rms_history, spatial_history, time_history,
+        inner_history, converged, depth_bound_hits, final_depth_bound_active)
 end

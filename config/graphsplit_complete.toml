@@ -187,6 +187,34 @@ pin_fields = "xyz"
 # Optional partial catalog with trusted positions for every pinned ID. Empty uses seed.
 pin_reference_catalog = ""
 
+[constraints.depth_bound]
+# Impose a physical minimum catalog depth independently of the gauge.
+enabled = false
+# Catalog-depth convention in kilometres; -0.8 means 800 m above the datum.
+minimum_depth_km = 0.0
+# all | event_ids. The ID list must be empty for all and nonempty for event_ids.
+scope = "all"
+event_ids = []
+# Run an unconstrained Stage-1 pilot, reflect forbidden solutions, then rerun
+# bounded Stage 1 before constructing the event graph.
+reflected_prelocation_restart = false
+# Forbidden-side depth range reserved for that pilot in the lookup table.
+pilot_shallow_margin_km = 10.0
+# stations_median uses the station-depth plane; manual uses mirror_depth_km.
+mirror_plane = "stations_median"
+mirror_depth_km = 0.0
+
+[constraints.fixed_depth]
+# Remove selected z parameters exactly while continuing to solve x, y, and t0.
+enabled = false
+# all | event_ids, with the same unambiguous list rules as the depth bound.
+scope = "all"
+event_ids = []
+# One depth for the selected events, ignored when reference_catalog is nonempty.
+depth_km = 0.0
+# Optional partial same-format catalog supplying an individual depth per selected ID.
+reference_catalog = ""
+
 [graph]
 # Nearest candidate events requested for each event.
 neighbors = 20

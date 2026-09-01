@@ -207,6 +207,18 @@ Without `pin_reference_catalog`, pins remain at the initialized in-memory seed.
 That is normally their `io.catalog_file` location, but under a common
 initialization mode it is the shared centroid or manual point.
 
+## Fixed-depth reference catalog
+
+`constraints.fixed_depth.reference_catalog` uses the same numeric catalog
+format and configured depth/ID columns. It may contain only the selected IDs
+and may use any row order. GraphSplit reads only the serial ID and depth; its
+latitude, longitude, date/time, and auxiliary values are ignored.
+
+For example, with `scope = "event_ids"` and `event_ids = [101, 202]`, a
+two-row file is sufficient. Every selected ID must appear exactly once in the
+reference catalog. When this path is empty, `constraints.fixed_depth.depth_km`
+supplies one common depth.
+
 ## Native `.gstt` table
 
 The binary format is internal but stable within format version 1. It contains:
@@ -223,6 +235,22 @@ rebuilds incompatible tables when configured to do so. The header remains
 marked incomplete until both P and S cubes have been flushed, so an interrupted
 build cannot be mistaken for a valid table on the next run.
 
+## Depth-constraint sidecars
+
+When either depth constraint is enabled, `depth_constraint_status.csv` contains:
+
+```text
+EventID,bound_applies,fixed_depth,bound_depth_km,fixed_depth_km,reflected_prelocation,bound_hits_prelocation,bound_active_prelocation,bound_hits_relocation,bound_active_relocation,final_depth_km
+```
+
+It contains the union of bound-selected and fixed-depth events. Boolean fields
+are written as 0/1. `bound_hits_*` counts nonlinear iterations in which the
+active-set solver had to prevent a crossing. `bound_active_* = 1` means the
+final step ended exactly on the physical boundary. `NaN` in an inapplicable
+configured-depth field means that constraint does not apply to the event.
+
+This file is deliberately separate from all four scientific catalogs.
+
 ## Uncertainty sidecars
 
 `linerrxyz.txt` is whitespace-separated and contains:
@@ -233,6 +261,10 @@ EventID std_x_m std_y_m std_z_m cov_xx_m2 cov_xy_m2 cov_xz_m2 cov_yy_m2 cov_yz_m
 
 The x/y axes are local east/north and z follows the configured internal event
 vertical convention. Only events in `catalog_dd_filt.txt` are written.
+An exactly fixed z has zero conditional variance. For an event whose final
+solution is active at the one-sided physical bound, z standard deviation and
+z covariance terms are `NaN`; the x/y block remains the covariance conditional
+on the active bound.
 
 `booterrxyz.txt` contains one row per filtered ID:
 
@@ -261,6 +293,16 @@ multiplicity per replicate. With station-phase resampling, its label is the
 theta filename; with station resampling, it is the station code. This small file
 records exactly which information was omitted, retained once, or repeated in
 every bootstrap realization.
+
+With a physical depth bound, `bootstrap_depth_bound_status.txt` contains:
+
+```text
+EventID n_valid n_bound_active bound_active_fraction
+```
+
+The denominator includes only converged realizations in which that event has
+resampled support. A high active fraction means the saved depth cloud is
+strongly truncated by the physical prior.
 
 ## Benchmark truth
 

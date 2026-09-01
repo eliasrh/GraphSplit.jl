@@ -16,6 +16,19 @@ mode = "catalog"
 # longitude = -21.0000
 # depth_km = 2.0
 
+# Optional physical depth controls. These are independent of the gauge. A
+# minimum depth is positive downward, so -0.8 km represents 800 m elevation.
+[constraints.depth_bound]
+enabled = false
+minimum_depth_km = 0.0 # for example, -0.8 means 800 m elevation
+reflected_prelocation_restart = false
+
+[constraints.fixed_depth]
+enabled = false
+scope = "all" # use "event_ids" plus event_ids=[...] for a subset
+event_ids = []
+depth_km = 0.0 # for example, -0.8 fixes events at 800 m elevation
+
 [travel_time]
 velocity_model_file = "vm.txt"
 table_file = "lookuptable/graphsplit_tt.gstt"

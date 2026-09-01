@@ -1,190 +1,225 @@
-# GraphSplit (Julia)
+# GraphSplit.jl
 
-GraphSplit relocates earthquake catalogs from the synchronized `theta` and
+GraphSplit relocates earthquake catalogs using the synchronized `theta` and
 `thetaStd` files produced by [DDSync](https://github.com/eliasrh/DDSync). It is
 designed for large catalogs: the event graph is sparse, the nonlinear solve is
-matrix-free, and native travel-time tables are memory-mapped instead of loaded
-twice into RAM.
+matrix-free, and native travel-time tables are memory-mapped.
 
-This repository is the maintained implementation. It uses only Julia standard
-libraries and is driven by one TOML file.
+GraphSplit uses only Julia standard libraries, supports Cartesian and radial
+layered-Earth travel times, and is controlled by one TOML file.
 
-## Quick start
+## Start here
 
-Requirements: Julia 1.10 or later and completed DDSync `theta/` and
-`thetastd/` directories.
+The repository documentation is organized by task:
 
-```bash
-cp config/graphsplit_template.toml graphsplit.toml
-# Edit graphsplit.toml, then run:
-julia --project=. run_graphsplit.jl graphsplit.toml
+1. [Manual](docs/MANUAL.md) — the complete workflow, beginning with DDSync and
+   ending with interpretation and reproducibility.
+2. [Configuration reference](docs/CONFIGURATION_REFERENCE.md) — every TOML
+   setting, its units, interactions, and when to change it.
+3. [Input and output file formats](docs/FILE_FORMATS.md) — literal catalog,
+   station, theta, velocity-model, constraint, and uncertainty formats.
+4. [Configuration recipes](examples/README.md) — copy-ready TOML fragments for
+   common seeds, second passes, pins, fixed depths, depth bounds, radial tables,
+   and uncertainty estimates.
+5. [Validation guide](docs/VALIDATION.md) — tests and checks to perform before
+   interpreting a field catalog.
+6. [MATLAB parity notes](docs/MATLAB_PARITY.md) — what is preserved from the
+   prototype and what intentionally differs.
+
+New users should read the first three in that order. The minimal
+[`graphsplit_template.toml`](config/graphsplit_template.toml) contains the
+settings most likely to be changed. The commented
+[`graphsplit_complete.toml`](config/graphsplit_complete.toml) exposes every
+available option.
+
+## Before GraphSplit: run DDSync
+
+GraphSplit does not read `dt.cc` directly. First run DDSync and retain:
+
+```text
+theta/
+thetastd/
 ```
 
-On the first run GraphSplit builds a native travel-time table if it does not
-already exist. Later runs inspect the table header, detect Cartesian versus
-radial geometry, validate its model hash, spacing, and coverage, and reuse or
-rebuild it as needed.
+The catalog supplied to GraphSplit must preserve DDSync's persistent serial
+`EventID` values. Matching is by ID, never by row number or row order.
 
-To build or validate only the travel-time table:
+## Five-minute setup
+
+Requirements: Julia 1.10 or later and a completed DDSync run.
+
+1. Copy the minimal configuration beside the dataset:
+
+   ```bash
+   cp /path/to/GraphSplit.jl/config/graphsplit_template.toml graphsplit.toml
+   ```
+
+2. Arrange or point the TOML to these inputs:
+
+   ```text
+   my_run/
+     graphsplit.toml
+     catalog.txt
+     stations.txt
+     vm.txt
+     theta/
+     thetastd/
+   ```
+
+3. In `graphsplit.toml`, check at least:
+
+   | Question | Setting |
+   | --- | --- |
+   | Are the five input/output paths correct? | `[io]` |
+   | Are individual catalog locations usable? | `initialization.mode` |
+   | Is the network local or geographically broad? | `travel_time.build_geometry` |
+   | Is the lookup spacing adequate? | `[lookup]` |
+   | How local should Stage-2 pairs be? | `[graph]` |
+   | How much damping is appropriate? | `prelocation.damping_lambda`, `relocation.damping_lambda` |
+   | Is a physical depth limit or known depth required? | `[constraints.depth_bound]`, `[constraints.fixed_depth]` |
+   | Are uncertainty samples needed? | `uncertainty.method` |
+
+4. Run GraphSplit:
+
+   ```bash
+   julia --project=/path/to/GraphSplit.jl \
+     /path/to/GraphSplit.jl/run_graphsplit.jl \
+     /path/to/my_run/graphsplit.toml
+   ```
+
+5. Inspect `solver_history.csv`, `catalog_dd_graphmeta.csv`, and
+   `run_summary.toml` before interpreting `catalog_dd_filt.txt`.
+
+No package installation is needed. `--project` selects this repository's Julia
+environment. Paths inside the TOML are resolved relative to the TOML file, not
+the terminal's current directory.
+
+## Required inputs
+
+- `catalog.txt`: numeric catalog. Defaults use latitude, longitude, and depth
+  in columns 7, 8, and 9 and the positive serial `EventID` in the final column.
+- `stations.txt`: `STA latitude longitude elevation_m`, or
+  `NET STA latitude longitude elevation_m`.
+- `theta/theta_<STA>_<P|S>.txt`: synchronized DDSync theta values.
+- `thetastd/std_theta_<STA>_<P|S>.txt`: theta uncertainty and normally DDSync
+  graph degree.
+- `vm.txt`: `depth_km Vp_km_s Vs_km_s`, or the radial
+  `depth_km radius_km Vp_km_s Vs_km_s` form.
+
+See [FILE_FORMATS.md](docs/FILE_FORMATS.md) before adapting a catalog or
+velocity model.
+
+## What the two stages do
+
+- Stage 1 uses theta-reference star observations to improve or construct the
+  starting catalog.
+- Stage 2 builds a sparse local event graph from the Stage-1 solution and
+  performs double-difference relocation on its retained event pairs.
+
+The default `initialization.mode = "catalog"` uses individual input
+hypocenters. `common_centroid` and `common_manual` start every event together;
+they require Stage 1 so the event graph is never constructed from coincident
+points.
+
+On the first lookup-model run, GraphSplit builds a native `.gstt` travel-time
+table. Later runs validate its velocity-model hash, geometry, spacing, and
+coverage before reuse. To build or validate only the table:
 
 ```bash
 julia --project=. build_travel_times.jl graphsplit.toml
 julia --project=. build_travel_times.jl graphsplit.toml --force
 ```
 
-No package installation is needed. `--project=.` only selects this repository's
-Julia project.
+## Depth constraints
 
-## Required inputs
+Depth constraints are independent of the gauge and apply in both relocation
+stages and bootstrap replicates.
 
-- `catalog.txt`: DDSync catalog format. Defaults assume latitude, longitude,
-  and depth in columns 7, 8, and 9, with the positive integer serial event ID
-  in the final column.
-- `stations.txt`: `STA latitude longitude elevation_m`; the five-column
-  `NET STA latitude longitude elevation_m` form is also accepted.
-- `theta/theta_<STA>_<P|S>.txt`: `EventID theta refEventID`.
-- `thetastd/std_theta_<STA>_<P|S>.txt`: normally
-  `EventID std_theta refEventID degree`, with optional extra DDSync columns.
-- `vm.txt`: either `depth_km Vp_km_s Vs_km_s` or
-  `depth_km radius_km Vp_km_s Vs_km_s`. Repeated depths preserve velocity
-  discontinuities.
-
-Rows are matched by the serial event ID, not row order. Reordered or filtered
-catalogs are therefore safe as long as their final IDs are unchanged.
-
-## Outputs
-
-The configured output directory contains:
-
-- `catalog_preloc.txt` and `catalog_preloc_filt.txt` from the theta-reference
-  star solve;
-- `catalog_dd.txt` and `catalog_dd_filt.txt` from sparse graph relocation;
-- `catalog_dd_graphmeta.csv`, with component, degree, and support diagnostics;
-- `solver_history.csv`, with nonlinear and PCG convergence history;
-- `run_summary.toml`, with the run's core counts and final residuals.
-
-When requested with `[uncertainty]`, catalogs remain unchanged and additional
-sidecars are written:
-
-- `linerrxyz.txt`, containing regularized linearized x/y/z standard deviations
-  and covariance terms for filtered serial IDs;
-- `booterrxyz.txt`, containing bootstrap interval/covariance summaries;
-- `bootstrap_samples_lon.txt`, `bootstrap_samples_lat.txt`,
-  `bootstrap_samples_depth_km.txt`, and `bootstrap_samples_t0_s.txt`, with the
-  all-data solution and every station-phase bootstrap realization;
-- `bootstrap_replicates.txt`, `bootstrap_block_counts.txt`, and
-  `bootstrap_metadata.toml`, recording convergence, exact block multiplicities,
-  and the interpretation of the bootstrap.
-
-The catalog date/time and auxiliary columns are preserved. GraphSplit's
-internal origin-time adjustments are relative nuisance parameters and are not
-written into columns 1–6, matching the MATLAB implementation.
-
-To retain empirical location clouds without changing the catalog format:
+To prevent events from becoming shallower than a physical surface:
 
 ```toml
-[uncertainty]
-method = "bootstrap"
-
-[uncertainty.bootstrap]
-replicates = 100
-resampling_unit = "station_phase"
-write_samples = true
+[constraints.depth_bound]
+enabled = true
+minimum_depth_km = -0.8
+scope = "all"
+reflected_prelocation_restart = true
+pilot_shallow_margin_km = 10.0
+mirror_plane = "stations_median"
 ```
 
-The bootstrap is optional because it reruns Stage 2 once per replicate. Use
-`method = "linearized"` for the cheaper formal estimate, or `method = "both"`.
+With the normal positive-down convention, `-0.8` km represents 800 m elevation.
+The solver uses an active bound rather than travel-time-table clamping. The
+optional reflected restart first searches for the sparse-network mirror branch,
+reflects forbidden Stage-1 solutions about the selected plane, reruns bounded
+Stage 1, and only then constructs the event graph. If the pilot exceeds the
+reserved lookup range, increase `pilot_shallow_margin_km` and rebuild the table.
 
-## Cartesian and radial travel times
-
-The native builder solves a first-order Godunov eikonal equation by fast
-sweeping for P and S waves. Both builders retain station elevation as the third
-lookup axis:
-
-- Cartesian: `T(horizontal_range_m, event_depth_m, station_depth_m)`.
-- Radial: `T(central_angle_rad, event_depth_m, station_depth_m)` for an
-  axisymmetric spherical Earth.
-
-Choose the builder used when no compatible table exists:
+To locate explosions horizontally and in origin time while keeping their depth
+known exactly:
 
 ```toml
-[travel_time]
-geometry = "auto"
-build_geometry = "radial" # or "cartesian"
+[constraints.fixed_depth]
+enabled = true
+scope = "all"                # or "event_ids"
+event_ids = []                # required only for event_ids scope
+depth_km = -0.8
 ```
 
-`geometry = "auto"` is recommended. Geometry is read from the native `.gstt`
-header. MATLAB `.mat` lookup tables are intentionally not accepted: the native
-format records provenance and can be memory-mapped safely.
+Constraint status is written to `depth_constraint_status.csv`; the scientific
+catalog columns remain unchanged. A boundary-active event has unresolved
+one-sided depth, not a measured location exactly on the boundary.
 
-## Basic, common-seed, iterated, and pinned runs
+## Principal outputs
 
-The same runner covers all four cases; there are no divergent example
-programs to maintain.
+The output directory contains:
 
-- Basic: use the template TOML unchanged apart from paths and grid/graph scale.
-- Common seed: set `initialization.mode = "common_centroid"` to start every
-  event at the input catalog centroid, or `"common_manual"` to specify one
-  latitude, longitude, and depth. Stage 1 is required and separates the events
-  before Stage 2 constructs the sparse graph. This permits a complete location
-  without single-event catalog hypocenters.
-- Iterated: run once, then use the first pass's `catalog_dd.txt` as the second
-  pass `io.catalog_file`, select a new output directory, and set
-  `run.prelocation = false`. A broad first graph and tighter second graph are a
-  useful schedule, not a separate algorithm.
-- Pinned: set `gauge.mode = "pin"`, list exact serial IDs in
-  `gauge.pin_event_ids`, and choose `gauge.pin_fields`. Optionally provide a
-  trusted same-ID catalog in `gauge.pin_reference_catalog`.
+- `catalog_preloc.txt` and `catalog_preloc_filt.txt`;
+- `catalog_dd.txt` and `catalog_dd_filt.txt`;
+- `catalog_dd_graphmeta.csv`, with graph and observation support per event;
+- `solver_history.csv`, with nonlinear and inner-solver convergence;
+- `run_summary.toml`, with run settings and core counts;
+- `depth_constraint_status.csv` when a physical or fixed depth is enabled.
 
-Pinning one or a few events after moving only those events is not a reliable
-way to translate an entire catalog. The pin itself is exact, but the resulting
-large residuals can be strongly Huber-downweighted and the displaced pins can
-be isolated when the Stage-2 graph is built. Use common initialization when
-the problem is an inadequate seed catalog; use pins only as explicit trusted
-constraints within a consistently initialized, connected solution.
+The catalog's date/time and auxiliary columns are preserved. Internal relative
+origin-time corrections are nuisance parameters and are not written into the
+catalog date/time columns.
 
-Copy-ready TOML fragments are in [examples/README.md](examples/README.md). Every
-TOML key—including units, zero behavior, interactions, tuning advice, and
-worked examples—is covered in the plain-language
-[configuration reference](docs/CONFIGURATION_REFERENCE.md). The algorithmic
-reasoning is in [docs/MANUAL.md](docs/MANUAL.md).
+With `uncertainty.method = "linearized"`, `"bootstrap"`, or `"both"`, GraphSplit
+writes separate sidecars without changing any catalog format. Bootstrap output
+includes every longitude, latitude, depth, and relative-origin-time sample in
+wide serial-ID-keyed tables. See the [manual](docs/MANUAL.md#10-uncertainty-estimates)
+for interpretation.
 
-## Experimental bias diagnostic
+## Important workflow choices
 
-The coherent theta-bias fit is retained as an experimental, disabled option.
-It is deliberately absent from the minimal template because there is not yet
-clear evidence that applying it improves locations. Every switch is exposed in
-`config/graphsplit_complete.toml`. Enable the scan only to write a diagnostic
-model; apply a reviewed model in a later run with
-`experimental.bias.apply_model_file`.
+- Do not move one or a few events far from the swarm and expect hard pins to
+  translate the catalog. Large residuals can be Huber-downweighted, and the
+  displaced pins can become graph-isolated.
+- Use `common_centroid` or `common_manual` when individual seed locations are
+  unavailable or intentionally ignored.
+- Use fixed depth when depth is known externally; do not imitate it with very
+  large depth damping.
+- A cluster at the physical depth bound indicates unresolved depth. Inspect
+  `depth_constraint_status.csv` and bootstrap bound-active fractions.
+- `lookup.minimum_depth_km` controls table coverage only. It is not a physical
+  event bound.
 
-## Yifan benchmark utility
+## Testing
 
-The independent utility in `benchmark/yifan2025/` compares any relocated
-catalog to `truelocs.txt` using the paper's horizontal/depth accuracy,
-neighbor-pair precision within 2 km, and point-cloud Chamfer approach:
-
-```bash
-julia benchmark/yifan2025/compare_catalogs.jl \
-  graphsplit_output/catalog_dd.txt \
-  benchmark/yifan2025/input/truelocs.txt
-```
-
-It is intentionally outside the GraphSplit module and does not affect a run.
-
-## Documentation and tests
-
-- [Manual](docs/MANUAL.md)
-- [Complete configuration reference](docs/CONFIGURATION_REFERENCE.md)
-- [File formats](docs/FILE_FORMATS.md)
-- [Implementation and MATLAB parity](docs/MATLAB_PARITY.md)
-- [Validation notes](docs/VALIDATION.md)
-
-Run the test suite with:
+Run:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
+
+GitHub Actions tests Julia 1.10 and the current stable Julia release. Scientific
+validation remains dataset-specific; follow [VALIDATION.md](docs/VALIDATION.md).
+
+## Additional tools
+
+The independent comparator in `benchmark/yifan2025/` reports horizontal/depth
+accuracy, local neighbor-pair precision, and point-cloud Chamfer distance. The
+coherent theta-bias scan remains experimental and disabled by default.
 
 ## Citation and license
 

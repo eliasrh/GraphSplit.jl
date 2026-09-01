@@ -106,6 +106,25 @@ function default_config()
             "pin_fields" => "xyz",
             "pin_reference_catalog" => "",
         ),
+        "constraints" => Dict{String,Any}(
+            "depth_bound" => Dict{String,Any}(
+                "enabled" => false,
+                "minimum_depth_km" => 0.0,
+                "scope" => "all",
+                "event_ids" => Int[],
+                "reflected_prelocation_restart" => false,
+                "pilot_shallow_margin_km" => 10.0,
+                "mirror_plane" => "stations_median",
+                "mirror_depth_km" => 0.0,
+            ),
+            "fixed_depth" => Dict{String,Any}(
+                "enabled" => false,
+                "scope" => "all",
+                "event_ids" => Int[],
+                "depth_km" => 0.0,
+                "reference_catalog" => "",
+            ),
+        ),
         "graph" => Dict{String,Any}(
             "neighbors" => 20,
             "maximum_degree" => 30,
@@ -225,7 +244,25 @@ function normalize_config_paths!(cfg::Dict{String,Any}, base::String)
     if !isempty(value) && !isabspath(value)
         bias["apply_model_file"] = normpath(joinpath(base, value))
     end
+    fixed_depth = cfg["constraints"]["fixed_depth"]
+    value = String(get(fixed_depth, "reference_catalog", ""))
+    if !isempty(value) && !isabspath(value)
+        fixed_depth["reference_catalog"] = normpath(joinpath(base, value))
+    end
     return cfg
+end
+
+function validate_constraint_scope(options::AbstractDict, label::String)
+    scope = lowercase(String(get(options, "scope", "all")))
+    scope in ("all", "event_ids") || error("$label.scope must be all or event_ids")
+    ids = Int64.(get(options, "event_ids", Int[]))
+    all(>(0), ids) || error("$label.event_ids must contain positive serial EventIDs")
+    length(unique(ids)) == length(ids) || error("$label.event_ids cannot contain duplicates")
+    if Bool(get(options, "enabled", false))
+        scope == "all" && !isempty(ids) && error("$label.event_ids must be empty when scope=all")
+        scope == "event_ids" && isempty(ids) && error("$label.scope=event_ids requires at least one event ID")
+    end
+    return nothing
 end
 
 "Load a TOML file, recursively merge it into defaults, and resolve relative paths from the TOML directory."
@@ -294,6 +331,27 @@ function validate_config(cfg::Dict{String,Any})
     gauge_mode = lowercase(String(cfgget(cfg, "gauge", "mode")))
     gauge_mode in ("zero_mean", "pin") || error("gauge.mode must be zero_mean or pin")
     Float64(cfgget(cfg, "gauge", "constraint_weight")) > 0.0 || error("gauge.constraint_weight must be positive")
+    depth_bound = cfgget(cfg, "constraints", "depth_bound")
+    fixed_depth = cfgget(cfg, "constraints", "fixed_depth")
+    validate_constraint_scope(depth_bound, "constraints.depth_bound")
+    validate_constraint_scope(fixed_depth, "constraints.fixed_depth")
+    for (options, label, key) in ((depth_bound, "constraints.depth_bound", "minimum_depth_km"),
+            (fixed_depth, "constraints.fixed_depth", "depth_km"))
+        isfinite(Float64(get(options, key, 0.0))) || error("$label.$key must be finite")
+    end
+    mirror_plane = lowercase(String(get(depth_bound, "mirror_plane", "stations_median")))
+    mirror_plane in ("stations_median", "manual") ||
+        error("constraints.depth_bound.mirror_plane must be stations_median or manual")
+    isfinite(Float64(get(depth_bound, "mirror_depth_km", 0.0))) ||
+        error("constraints.depth_bound.mirror_depth_km must be finite")
+    pilot_shallow_margin = Float64(get(depth_bound, "pilot_shallow_margin_km", 10.0))
+    isfinite(pilot_shallow_margin) && pilot_shallow_margin >= 0.0 ||
+        error("constraints.depth_bound.pilot_shallow_margin_km must be finite and nonnegative")
+    reflected_restart = Bool(get(depth_bound, "reflected_prelocation_restart", false))
+    reflected_restart && !Bool(get(depth_bound, "enabled", false)) &&
+        error("constraints.depth_bound.reflected_prelocation_restart requires the depth bound to be enabled")
+    reflected_restart && !Bool(cfgget(cfg, "run", "prelocation"; default=true)) &&
+        error("constraints.depth_bound.reflected_prelocation_restart requires run.prelocation=true")
     augmentation = cfgget(cfg, "graph", "augmentation")
     candidate_neighbors = Int(get(augmentation, "candidate_neighbors", 40))
     add_edges = Int(get(augmentation, "add_edges", 0))

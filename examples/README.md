@@ -95,6 +95,58 @@ See the [complete configuration reference](../docs/CONFIGURATION_REFERENCE.md)
 for a literal three-line trusted-catalog example and an explanation of every
 setting.
 
+## Prevent sparse-station mirror solutions above a surface
+
+```toml
+[constraints.depth_bound]
+enabled = true
+minimum_depth_km = -0.8
+scope = "all"
+event_ids = []
+reflected_prelocation_restart = true
+pilot_shallow_margin_km = 10.0
+mirror_plane = "stations_median"
+mirror_depth_km = -0.8 # ignored unless mirror_plane = "manual"
+
+[run]
+prelocation = true
+```
+
+Here `-0.8` km means 800 m elevation with the default positive-down catalog
+depth. The unconstrained Stage-1 pilot searches for mirror solutions; only
+forbidden pilot depths are reflected, then bounded Stage 1 is rerun before the
+event graph is constructed. If the pilot leaves its reserved travel-time-table
+range, increase `pilot_shallow_margin_km` and rebuild. Inspect
+`depth_constraint_status.csv` rather than interpreting an event on the boundary
+as a resolved depth.
+
+## Fix the depth of every explosion
+
+```toml
+[constraints.fixed_depth]
+enabled = true
+scope = "all"
+event_ids = []
+depth_km = -0.8
+reference_catalog = ""
+```
+
+GraphSplit continues to solve longitude/latitude and relative origin time. To
+fix only selected explosions, use:
+
+```toml
+[constraints.fixed_depth]
+enabled = true
+scope = "event_ids"
+event_ids = [101, 202, 303]
+depth_km = -0.8
+reference_catalog = ""
+```
+
+Set `reference_catalog` to a partial same-format catalog when each selected
+event has a different known depth. Do not also include z in a gauge pin for the
+same IDs.
+
 ## Radial table
 
 ```toml

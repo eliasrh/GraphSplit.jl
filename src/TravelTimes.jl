@@ -142,17 +142,23 @@ function lookup_grids(cfg::AbstractDict, stations::Stations, catalog::Catalog, s
         (configured_max isa Real && Float64(configured_max) > 0.0 ? 1000.0 : 1.0)
     rmax + 1.0e-6 >= required || error(@sprintf("Configured lookup maximum distance %.3f km is smaller than the required %.3f km", rmax / 1000, required / 1000))
 
-    auto_zmin = min(minimum(model.depth_m), minimum(stations.z_m), minimum(state.z))
+    required_constraint_depths = constraint_required_depths(state, stations, cfg)
+    auto_zmin = min(minimum(model.depth_m), minimum(stations.z_m), minimum(state.z),
+        isempty(required_constraint_depths) ? Inf : minimum(required_constraint_depths))
     configured_zmin = cfgget(cfg, "lookup", "minimum_depth_km"; default=0.0)
     zmin = configured_zmin isa Real && isfinite(Float64(configured_zmin)) && Float64(configured_zmin) != 0.0 ?
         1000.0 * Float64(configured_zmin) : auto_zmin
     depth_margin = 1000.0 * Float64(cfgget(cfg, "lookup", "depth_margin_km"; default=50.0))
-    auto_zmax = max(maximum(state.z) + depth_margin, 0.35rmax, min(maximum(model.depth_m), 100_000.0))
+    auto_zmax = max(maximum(state.z) + depth_margin, 0.35rmax,
+        min(maximum(model.depth_m), 100_000.0),
+        isempty(required_constraint_depths) ? -Inf : maximum(required_constraint_depths))
     configured_zmax = cfgget(cfg, "lookup", "maximum_depth_km"; default=0.0)
     zmax = configured_zmax isa Real && isfinite(Float64(configured_zmax)) && Float64(configured_zmax) > 0.0 ?
         1000.0 * Float64(configured_zmax) : auto_zmax
     zmin <= minimum(stations.z_m) && zmax >= maximum(stations.z_m) || error("Lookup depth range does not contain every station")
     zmin <= minimum(state.z) && zmax >= maximum(state.z) || error("Lookup depth range does not contain every input event")
+    all(zmin <= required_depth <= zmax for required_depth in required_constraint_depths) ||
+        error("Lookup depth range does not contain the configured physical/reflected depth-constraint coverage")
 
     izmin, izmax = floor(Int, zmin / dz), ceil(Int, zmax / dz)
     z = collect((izmin:izmax) .* dz)
@@ -327,6 +333,10 @@ function compare_table_coverage(table::TravelTimeTable, cfg::AbstractDict, stati
         return false, "station depth coverage is too small"
     minimum(state.z) >= table.z[1] - 1.0e-6 && maximum(state.z) <= table.z[end] + 1.0e-6 ||
         return false, "event depth coverage is too small"
+    for required_depth in constraint_required_depths(state, stations, cfg)
+        table.z[1] - 1.0e-6 <= required_depth <= table.z[end] + 1.0e-6 ||
+            return false, "physical/reflected depth-constraint coverage is too small"
+    end
     minimum(stations.z_m) >= table.zs[1] - 1.0e-6 && maximum(stations.z_m) <= table.zs[end] + 1.0e-6 ||
         return false, "station-depth interpolation coverage is too small"
     requested_step = Float64(cfgget(cfg, "lookup", "horizontal_step_m"))

@@ -8,6 +8,26 @@ function prepare_output_directory(cfg::AbstractDict)
     return output
 end
 
+"Run the branch-search pilot without hiding departures from its lookup grid."
+function solve_reflected_prelocation_pilot(initial::State, stations::Stations,
+        observations::Observations, travel_time::AbstractTravelTimeModel,
+        solver_cfg::AbstractDict, pilot_cfg::AbstractDict)
+    travel_time isa TravelTimeTable ||
+        return solve_relocation(initial, stations, observations, travel_time, solver_cfg, pilot_cfg)
+    previous_clamp = travel_time.clamp
+    travel_time.clamp = false
+    try
+        return solve_relocation(initial, stations, observations, travel_time, solver_cfg, pilot_cfg)
+    catch exception
+        if occursin("Travel-time lookup returned a non-finite value", sprint(showerror, exception))
+            error("The unconstrained reflected-depth pilot left the travel-time table. Increase constraints.depth_bound.pilot_shallow_margin_km and rebuild the table; clamping is deliberately disabled for this branch search")
+        end
+        rethrow()
+    finally
+        travel_time.clamp = previous_clamp
+    end
+end
+
 function apply_pin_reference!(state::State, stations::Stations, cfg::AbstractDict)
     reference_path = String(cfgget(cfg, "gauge", "pin_reference_catalog"; default=""))
     isempty(reference_path) && return state
@@ -32,8 +52,12 @@ end
 
 function write_summary(path::AbstractString, cfg::AbstractDict, catalog::Catalog, stations::Stations,
         groups, graph::EventGraph, pre::Observations, dd::Observations, pre_stats::SolveStats, dd_stats::SolveStats,
-        travel_time::AbstractTravelTimeModel)
+        travel_time::AbstractTravelTimeModel; reflected_depths::BitVector=falses(length(catalog)),
+        prelocation_pilot::Union{Nothing,SolveStats}=nothing)
     geometry = string(travel_time.geometry)
+    summary_state = State(copy(catalog.event_id), zeros(length(catalog)), zeros(length(catalog)),
+        zeros(length(catalog)), zeros(length(catalog)), catalog.ref_lat, catalog.ref_lon,
+        catalog.ref_radius_m)
     summary = Dict{String,Any}(
         "run" => Dict("completed_utc" => Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
             "config_file" => String(get(cfg, "_config_file", ""))),
@@ -46,6 +70,16 @@ function write_summary(path::AbstractString, cfg::AbstractDict, catalog::Catalog
             "observations" => length(dd), "iterations" => dd_stats.iterations,
             "final_robust_rms_s" => isempty(dd_stats.rms_s) ? NaN : dd_stats.rms_s[end]),
         "uncertainty" => Dict("method" => String(cfgget(cfg, "uncertainty", "method"; default="none"))),
+        "depth_constraints" => Dict(
+            "bound_enabled" => Bool(get(depth_bound_options(cfg), "enabled", false)),
+            "bound_events" => count(depth_bound_mask(summary_state, cfg)),
+            "fixed_depth_enabled" => Bool(get(fixed_depth_options(cfg), "enabled", false)),
+            "fixed_depth_events" => count(fixed_depth_mask(summary_state, cfg)),
+            "reflected_prelocation_events" => count(reflected_depths),
+            "prelocation_bound_active_events" => count(pre_stats.depth_bound_active),
+            "relocation_bound_active_events" => count(dd_stats.depth_bound_active),
+            "unconstrained_prelocation_pilot_ran" => prelocation_pilot !== nothing,
+        ),
     )
     open(path, "w") do io
         TOML.print(io, summary; sorted=true)
@@ -58,6 +92,8 @@ function build_travel_times(cfg::Dict{String,Any}; force::Bool=true)
     state = attach_coordinates!(stations, catalog, cfg)
     apply_initialization!(state, cfg)
     apply_pin_reference!(state, stations, cfg)
+    apply_fixed_depth_constraints!(state, cfg)
+    validate_depth_constraint_state!(state, cfg; allow_free_outside=true)
     table = prepare_travel_time(cfg, stations, catalog, state; force_build=force)
     table isa TravelTimeTable && @printf("Travel-time table ready: %s (%s)\n", table.file, string(table.geometry))
     return table
@@ -71,6 +107,9 @@ function run(cfg::Dict{String,Any})
     initial = attach_coordinates!(stations, catalog, cfg)
     apply_initialization!(initial, cfg)
     apply_pin_reference!(initial, stations, cfg)
+    apply_fixed_depth_constraints!(initial, cfg)
+    reflected_restart = Bool(get(depth_bound_options(cfg), "reflected_prelocation_restart", false))
+    validate_depth_constraint_state!(initial, cfg; allow_free_outside=reflected_restart)
     travel_time = prepare_travel_time(cfg, stations, catalog, initial)
     if Bool(cfgget(cfg, "run", "build_travel_times_only"; default=false))
         result = (geometry=travel_time.geometry,
@@ -84,6 +123,8 @@ function run(cfg::Dict{String,Any})
     isempty(bias_model) || apply_bias_model!(groups, bias_model, initial, catalog)
 
     do_prelocation = Bool(cfgget(cfg, "run", "prelocation"; default=true))
+    reflected_depths = falses(length(catalog))
+    prelocation_pilot_stats = nothing
     if do_prelocation
         println("\n=== Stage 1: theta prelocation ===")
         pre_observations = build_star_observations(groups, stations, catalog, cfg)
@@ -92,16 +133,44 @@ function run(cfg::Dict{String,Any})
                 error("No Stage-1 observations survived, so the common initial hypocenter cannot be separated into an event graph")
             @warn "No Stage-1 observations survived; using the input catalog as the Stage-2 seed"
             pre_state = copy_state(initial)
-            pre_stats = SolveStats(0, Float64[], Float64[], Float64[], Int[], true)
+            if reflected_restart
+                reflected_depths .= reflect_depth_violations!(pre_state, stations, cfg)
+                any(reflected_depths) && @printf("Reflected %d initial depths into the admissible branch before graph construction\n",
+                    count(reflected_depths))
+            end
+            pre_stats = SolveStats(0, Float64[], Float64[], Float64[], Int[], true,
+                zeros(Int, length(catalog)), falses(length(catalog)))
         else
-            pre_state, pre_stats = solve_relocation(initial, stations, pre_observations, travel_time,
-                cfg["prelocation"], cfg)
+            if reflected_restart
+                println("--- Unconstrained Stage-1 pilot for mirrored-depth branch search ---")
+                pilot_cfg = deepcopy(cfg)
+                pilot_cfg["constraints"]["depth_bound"]["enabled"] = false
+                pilot_cfg["constraints"]["depth_bound"]["reflected_prelocation_restart"] = false
+                pilot_state, pilot_stats = solve_reflected_prelocation_pilot(initial, stations,
+                    pre_observations, travel_time, cfg["prelocation"], pilot_cfg)
+                restart_state = copy_state(pilot_state)
+                reflected_depths .= reflect_depth_violations!(restart_state, stations, cfg)
+                if any(reflected_depths)
+                    prelocation_pilot_stats = pilot_stats
+                    @printf("Reflected %d Stage-1 pilot depths; rerunning Stage 1 with the active bound\n",
+                        count(reflected_depths))
+                    pre_state, pre_stats = solve_relocation(restart_state, stations, pre_observations,
+                        travel_time, cfg["prelocation"], cfg)
+                else
+                    println("Stage-1 pilot ended inside the depth bound; no reflected restart was needed")
+                    pre_state, pre_stats = pilot_state, pilot_stats
+                end
+            else
+                pre_state, pre_stats = solve_relocation(initial, stations, pre_observations, travel_time,
+                    cfg["prelocation"], cfg)
+            end
         end
     else
         println("\n=== Stage 1 skipped: input catalog is the Stage-2 seed ===")
         pre_observations = Observations()
         pre_state = copy_state(initial)
-        pre_stats = SolveStats(0, Float64[], Float64[], Float64[], Int[], true)
+        pre_stats = SolveStats(0, Float64[], Float64[], Float64[], Int[], true,
+            zeros(Int, length(catalog)), falses(length(catalog)))
     end
     write_catalog(joinpath(output, "catalog_preloc.txt"), catalog, pre_state, cfg)
     pre_mask = do_prelocation && !isempty(pre_observations) ? event_activity(pre_observations, length(catalog)) : trues(length(catalog))
@@ -123,7 +192,12 @@ function run(cfg::Dict{String,Any})
         write_graph_metadata(joinpath(output, "catalog_dd_graphmeta.csv"), catalog, graph, pre_observations, dd_observations)
     end
     if Bool(cfgget(cfg, "output", "write_solver_history"; default=true))
-        write_solver_history(joinpath(output, "solver_history.csv"), pre_stats, dd_stats)
+        write_solver_history(joinpath(output, "solver_history.csv"), pre_stats, dd_stats;
+            prelocation_pilot=prelocation_pilot_stats)
+    end
+    if Bool(get(depth_bound_options(cfg), "enabled", false)) || Bool(get(fixed_depth_options(cfg), "enabled", false))
+        write_depth_constraint_status(joinpath(output, "depth_constraint_status.csv"), catalog,
+            dd_state, cfg, pre_stats, dd_stats, reflected_depths)
     end
     uncertainty_method = lowercase(String(cfgget(cfg, "uncertainty", "method"; default="none")))
     linearized_uncertainty = nothing
@@ -131,7 +205,7 @@ function run(cfg::Dict{String,Any})
     if uncertainty_method in ("linearized", "both")
         println("\n=== Uncertainty: regularized linearized covariance ===")
         linearized_uncertainty = estimate_linearized_uncertainty(dd_state, stations, dd_observations,
-            travel_time, dd_mask, cfg)
+            travel_time, dd_mask, cfg; depth_bound_active=dd_stats.depth_bound_active)
         write_linearized_uncertainty(joinpath(output, "linerrxyz.txt"), catalog.event_id,
             dd_mask, linearized_uncertainty)
     end
@@ -148,12 +222,15 @@ function run(cfg::Dict{String,Any})
     end
     if Bool(cfgget(cfg, "output", "write_run_summary"; default=true))
         write_summary(joinpath(output, "run_summary.toml"), cfg, catalog, stations, groups, graph,
-            pre_observations, dd_observations, pre_stats, dd_stats, travel_time)
+            pre_observations, dd_observations, pre_stats, dd_stats, travel_time;
+            reflected_depths=reflected_depths, prelocation_pilot=prelocation_pilot_stats)
     end
     travel_time isa TravelTimeTable && close(travel_time.io)
     @printf("\nGraphSplit complete. Outputs: %s\n", output)
     return (catalog=catalog, stations=stations, groups=groups, pre_state=pre_state, dd_state=dd_state,
         graph=graph, pre_observations=pre_observations, dd_observations=dd_observations,
         pre_stats=pre_stats, dd_stats=dd_stats, linearized_uncertainty=linearized_uncertainty,
-        bootstrap_uncertainty=bootstrap_uncertainty, bias_report=bias_report, output_dir=output)
+        bootstrap_uncertainty=bootstrap_uncertainty, bias_report=bias_report,
+        reflected_depths=reflected_depths, prelocation_pilot_stats=prelocation_pilot_stats,
+        output_dir=output)
 end

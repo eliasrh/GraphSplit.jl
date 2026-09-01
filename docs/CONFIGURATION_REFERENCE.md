@@ -35,6 +35,9 @@ Most users should tune settings in this order.
 6. **Reference frame or trusted events:** `[gauge]` determines whether the
    solution is free to translate weakly, has a zero-mean update, or is tied to
    exact trusted locations.
+7. **External depth information:** `[constraints.depth_bound]` prevents
+   physically impossible shallow solutions; `[constraints.fixed_depth]`
+   removes depth from the solve when it is known independently.
 
 ### Usually changed only after inspecting diagnostics
 
@@ -57,6 +60,8 @@ Most users should tune settings in this order.
 | No reliable single-event seed locations | `initialization.mode`, Stage-1 coverage | Use `common_centroid` or a reasonable `common_manual` seed and keep `run.prelocation = true` |
 | PCG repeatedly reaches its iteration limit | Graph support, damping, preconditioner | Increase damping, retain `block_jacobi`, or increase `inner_max_iterations`; do not begin by making `inner_tolerance` tighter |
 | Locations pile up at a table boundary | Lookup depth/range and clamping | Rebuild a larger table; clamping prevents a crash but does not make boundary locations reliable |
+| Sparse-station events mirror above the surface | `constraints.depth_bound`, Stage-1 depth geometry | Add an explicit physical minimum depth; enable the reflected Stage-1 restart when the deeper mirror branch is expected |
+| Explosions have a known surface or bench depth | `constraints.fixed_depth` | Fix z exactly for all events or selected serial IDs while continuing to solve x, y, and t0 |
 | Run is too slow or table is too large | Lookup spacings and station-depth slices | Coarsen the table carefully, especially `station_depth_step_m`; compare locations before accepting reduced resolution |
 
 The numerical values below are defaults, not universal recommendations.
@@ -319,7 +324,91 @@ in `catalog_dd_graphmeta.csv` that the pins belong to the main retained
 component. A very large Huber threshold disables most robust downweighting and
 is appropriate here only as a diagnostic.
 
-## 13. Choosing nearby event pairs: `[graph]`
+## 13. Physical and fixed depths: `[constraints]`
+
+These settings are independent of `[gauge]`. A gauge selects the reference
+frame of the relative problem; a depth constraint supplies external physical
+information about particular z parameters. Both constraints apply in Stage 1,
+Stage 2, and every nonlinear bootstrap replicate.
+
+All configured depths use the catalog convention and kilometres. With the
+default `coordinates.event_vertical = "positive_depth"`, `-0.8` km means an
+elevation of 800 m above the datum.
+
+### No-cross physical depth: `[constraints.depth_bound]`
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `constraints.depth_bound.enabled` | `false` | Enable a physical minimum catalog depth. This is a model constraint, unlike `lookup.minimum_depth_km`, which only sizes the travel-time table. |
+| `constraints.depth_bound.minimum_depth_km` | 0.0 | Shallowest permitted catalog depth in kilometres. In the default positive-down convention, every selected event must satisfy `depth >= minimum_depth_km`. |
+| `constraints.depth_bound.scope` | `"all"` | `all` applies to every event and requires an empty ID list. `event_ids` applies only to the explicit serial IDs below and requires a nonempty list. |
+| `constraints.depth_bound.event_ids` | `[]` | Persistent serial IDs used only with `scope = "event_ids"`. Missing, duplicate, or nonpositive IDs are errors. |
+| `constraints.depth_bound.reflected_prelocation_restart` | `false` | When true, run an unconstrained Stage-1 pilot, reflect forbidden pilot depths, rerun bounded Stage 1, and build the Stage-2 graph only from that bounded solution. It requires `run.prelocation = true`. When false, the ordinary Stage-1 solve is bounded directly and all starting depths must already be feasible. |
+| `constraints.depth_bound.pilot_shallow_margin_km` | 10.0 | Extra forbidden-side depth range reserved in an automatically built lookup table for the unconstrained pilot. It is used only by the reflected restart. Clamping is disabled during the pilot, so an explicitly sized or reused table that is still too small produces an error instead of a zero depth gradient. Increase this value and rebuild if the pilot leaves the table. |
+| `constraints.depth_bound.mirror_plane` | `"stations_median"` | Plane for the explicit restart: `stations_median` uses the median internal station depth; `manual` uses `mirror_depth_km`. This has no effect when the reflected restart is off. |
+| `constraints.depth_bound.mirror_depth_km` | 0.0 | Manual mirror-plane depth in catalog kilometres, used only with `mirror_plane = "manual"`. Reflected candidates must land inside the physical bound or GraphSplit stops with an error. |
+
+The active-set solver first computes a trial update. If a selected event would
+cross the physical bound, its z update is placed exactly on the boundary and
+the coupled x, y, and t0 update is re-solved. At the next nonlinear iteration,
+z is released automatically if its trial direction points into the admissible
+interior. This avoids using table clamping as an accidental geological
+constraint.
+
+An event may still finish exactly at the bound. That means the constrained
+objective prefers the forbidden side; it does not mean the boundary depth was
+measured. Check `depth_constraint_status.csv` and, for bootstrap runs,
+`bootstrap_depth_bound_status.txt`.
+
+For sparse stations at similar elevation, the reflected restart searches the
+deeper branch before the event graph is built:
+
+```toml
+[constraints.depth_bound]
+enabled = true
+minimum_depth_km = -0.8
+scope = "all"
+event_ids = []
+reflected_prelocation_restart = true
+pilot_shallow_margin_km = 10.0
+mirror_plane = "stations_median"
+mirror_depth_km = -0.8 # ignored for stations_median
+```
+
+The lookup-table compatibility check includes the physical boundary, the
+configured pilot margin, and the reflection of the seed depth range. During
+the pilot, table clamping is disabled. If the nonlinear search still leaves
+that range, GraphSplit stops; increase `pilot_shallow_margin_km` and rebuild
+the table rather than accepting zero out-of-grid depth gradients.
+
+### Exact known depths: `[constraints.fixed_depth]`
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `constraints.fixed_depth.enabled` | `false` | Freeze selected z parameters exactly while continuing to solve x, y, and relative origin time. |
+| `constraints.fixed_depth.scope` | `"all"` | `all` fixes every event and requires an empty ID list. `event_ids` fixes only the listed serial IDs and requires at least one. |
+| `constraints.fixed_depth.event_ids` | `[]` | Persistent serial IDs used with `scope = "event_ids"`. These are never interpreted as row numbers. |
+| `constraints.fixed_depth.depth_km` | 0.0 | One fixed catalog depth in kilometres for every selected event. Ignored when `reference_catalog` is nonempty. |
+| `constraints.fixed_depth.reference_catalog` | `""` | Optional same-format catalog supplying an individual depth for every selected ID. It may contain only the selected rows and may use any order. Latitude, longitude, time, and auxiliary columns are ignored. |
+
+For explosions known to occur on a bench at 800 m elevation:
+
+```toml
+[constraints.fixed_depth]
+enabled = true
+scope = "all"
+event_ids = []
+depth_km = -0.8
+reference_catalog = ""
+```
+
+Do not constrain the same z parameter through both fixed depth and a gauge pin;
+GraphSplit rejects that ambiguity. Remove `z` from `gauge.pin_fields` when x/y
+pinning and an independent fixed depth are both intended. A fixed-depth zero in
+`linerrxyz.txt` is conditional on the imposed equality, not an estimated zero
+geological error.
+
+## 14. Choosing nearby event pairs: `[graph]`
 
 GraphSplit does not compare every event with every other event. For each event
 it finds a limited number of nearby candidates, producing a sparse list of
@@ -346,7 +435,7 @@ Practical interpretation of the run message:
 - Use `catalog_dd_graphmeta.csv` to distinguish geometric connections from
   event pairs that survived measurement filters.
 
-## 14. Optional graph augmentation: `[graph.augmentation]`
+## 15. Optional graph augmentation: `[graph.augmentation]`
 
 Augmentation is an advanced, normally disabled step. It looks through a broader
 nearby-pair pool and adds a small number of connections intended to strengthen
@@ -392,7 +481,7 @@ maximum_added_per_event = 3
 Leave augmentation off unless ordinary graph settings and diagnostics show a
 specific connectivity weakness. It is not a general “improve locations” switch.
 
-## 15. Output switches: `[output]`
+## 16. Output switches: `[output]`
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -403,7 +492,7 @@ specific connectivity weakness. It is not a general “improve locations” swit
 
 These switches affect files only, not the location solution.
 
-## 16. Error and stability estimates: `[uncertainty]`
+## 17. Error and stability estimates: `[uncertainty]`
 
 Uncertainty calculations run only after the ordinary all-data relocation has
 finished. They write separate, serial-ID-keyed files and never add columns to
@@ -478,7 +567,7 @@ uncertainty introduced while DDSync estimated theta. A fully end-to-end study
 would resample the original differential-time data, rerun DDSync, and then rerun
 GraphSplit.
 
-## 17. Experimental theta-bias diagnostic: `[experimental.bias]`
+## 18. Experimental theta-bias diagnostic: `[experimental.bias]`
 
 This entire section is deliberately absent from the minimal TOML. The feature
 has not shown a consistent location benefit and should not be part of a default
@@ -497,7 +586,7 @@ scientific workflow.
 
 Always retain and report an uncorrected baseline if this experiment is used.
 
-## 18. Complete worked configurations
+## 19. Complete worked configurations
 
 ### Basic run with visible damping
 
