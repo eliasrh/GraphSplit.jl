@@ -20,8 +20,10 @@ Most users should tune settings in this order.
 1. **Travel-time model and geometry:** `travel_time.velocity_model_file`,
    `travel_time.build_geometry`, and the lookup spacing determine how travel
    times and their spatial gradients are represented.
-2. **Starting catalog and prelocation:** `io.catalog_file` and
-   `run.prelocation` determine the seed supplied to the final relocation.
+2. **Starting locations and prelocation:** `io.catalog_file`,
+   `initialization.mode`, and `run.prelocation` determine the seed supplied to
+   the final relocation. Common initialization allows location without
+   individual catalog hypocenters.
 3. **Spatial damping:** `prelocation.damping_lambda` and
    `relocation.damping_lambda` suppress poorly constrained motion. If the
    solution moves coherently or unrealistically away from a plausible seed,
@@ -52,6 +54,7 @@ Most users should tune settings in this order.
 | Catalog drifts coherently or moves implausibly far | Seed quality, gauge, `solver_history.csv` step sizes | Increase the relevant `damping_lambda` by a factor of 2–10; consider `gauge.zero_mean = "xyzt0_scaled"` for a weak first pass |
 | Only a small fraction of events relocate | `catalog_dd_graphmeta.csv`, DDSync degree, pair support | Relax `minimum_theta_degree` or `minimum_observations_per_pair` cautiously; enlarge the graph if pairs are missing |
 | Many graph components or zero-degree events | Graph degree/radius, seed locations | Increase `graph.neighbors`, relax `graph.maximum_distance_km`, or set `mutual = false`; use connectivity repair only after checking the cause |
+| No reliable single-event seed locations | `initialization.mode`, Stage-1 coverage | Use `common_centroid` or a reasonable `common_manual` seed and keep `run.prelocation = true` |
 | PCG repeatedly reaches its iteration limit | Graph support, damping, preconditioner | Increase damping, retain `block_jacobi`, or increase `inner_max_iterations`; do not begin by making `inner_tolerance` tighter |
 | Locations pile up at a table boundary | Lookup depth/range and clamping | Rebuild a larger table; clamping prevents a crash but does not make boundary locations reliable |
 | Run is too slow or table is too large | Lookup spacings and station-depth slices | Coarsen the table carefully, especially `station_depth_step_m`; compare locations before accepting reduced resolution |
@@ -64,7 +67,7 @@ All five paths may be relative to `graphsplit.toml` or absolute.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `io.catalog_file` | `"catalog.txt"` | Starting earthquake catalog. It supplies seed latitude, longitude, and depth plus the persistent serial event ID used to join every input and output. |
+| `io.catalog_file` | `"catalog.txt"` | Earthquake catalog. It supplies the persistent serial event ID and preserved columns; by default it also supplies individual seed latitude, longitude, and depth. `[initialization]` can override those individual seeds in memory. |
 | `io.stations_file` | `"stations.txt"` | Station coordinates and elevations. Station codes must exactly match the codes in theta filenames. |
 | `io.theta_dir` | `"theta"` | Directory containing DDSync `theta_<STA>_<P\|S>.txt` files. |
 | `io.thetastd_dir` | `"thetastd"` | Directory containing matching DDSync `std_theta_<STA>_<P\|S>.txt` uncertainty/degree files. Missing individual thetaStd files are allowed, but their observations then use the sigma floor and cannot be degree-filtered. |
@@ -95,7 +98,45 @@ backward from the end: `-1` is the last column and `-2` is the next-to-last.
 The latitude, longitude, depth, and ID columns must be distinct. GraphSplit
 preserves all other columns when writing catalogs.
 
-## 6. Internal coordinates: `[coordinates]`
+## 6. Starting hypocenters: `[initialization]`
+
+This section controls only the in-memory starting locations. It does not alter
+the input file and does not add location constraints to the inversion.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `initialization.mode` | `"catalog"` | `catalog` uses every input latitude, longitude, and depth as its event's seed. `common_centroid` replaces all seeds by the mean input x, y, and depth. `common_manual` replaces all seeds by the location in the next three settings. Both common modes require Stage 1. |
+| `initialization.latitude` | `0.0` | Common starting latitude in decimal degrees, used only by `common_manual`. It is an initial guess, not a fixed solution. |
+| `initialization.longitude` | `0.0` | Common starting longitude in decimal degrees, used only by `common_manual`. |
+| `initialization.depth_km` | `0.0` | Common starting depth in kilometres, used only by `common_manual` and interpreted using `coordinates.event_vertical`. |
+
+The common modes are useful when DDSync has been run but a conventional
+single-event locator has not produced a trustworthy input catalog. Stage 1
+separates the initially coincident events using station-phase theta data;
+Stage 2 then constructs its event graph from the Stage-1 locations. GraphSplit
+rejects a common mode with `run.prelocation = false`, because nearest neighbors
+among coincident points would be arbitrary.
+
+`common_centroid` still uses the catalog only to select a reasonable shared
+starting point. `common_manual` avoids using its location geometry altogether:
+
+```toml
+[initialization]
+mode = "common_manual"
+latitude = 64.0200
+longitude = -21.2100
+depth_km = 3.0
+
+[run]
+prelocation = true
+```
+
+If a common-start run struggles initially, inspect Stage-1 residuals and
+coverage. A larger `prelocation.huber_k` can be a useful sensitivity test when
+the first residuals are many sigma, but it should not be selected solely to
+force a desired location.
+
+## 7. Internal coordinates: `[coordinates]`
 
 Most datasets should keep every value in this section at its default. These
 settings describe how geographic inputs are converted into internal metres.
@@ -110,7 +151,7 @@ settings describe how geographic inputs are converted into internal metres.
 | `coordinates.event_vertical` | `"positive_depth"` | `positive_depth` interprets catalog depth as positive downward. `negative_depth` reverses its sign. `positive_depth_plus_z0` adds `event_z0_m` internally. |
 | `coordinates.event_z0_m` | `0.0` | Vertical offset in metres, used only by `positive_depth_plus_z0`; it is removed again when writing output. |
 
-## 7. Travel-time source and lifecycle: `[travel_time]`
+## 8. Travel-time source and lifecycle: `[travel_time]`
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -120,7 +161,7 @@ settings describe how geographic inputs are converted into internal metres.
 | `travel_time.geometry` | `"auto"` | Geometry required when opening a table: `auto`, `cartesian`, or `radial`. `auto` reads an existing table's geometry. If a table must be built, `auto` delegates to `build_geometry`. An explicit geometry rejects/rebuilds a table of the other type. |
 | `travel_time.build_geometry` | `"cartesian"` | Builder used when `geometry = "auto"` and no compatible table exists. `cartesian` is flat local range; `radial` uses spherical central angle. |
 | `travel_time.auto_build` | `true` | Build the table if it is missing. When `false`, a missing table is an error. |
-| `travel_time.auto_rebuild` | `true` | Rebuild an existing table when its model hash, geometry, Earth radius, spacing, or seed-catalog coverage is incompatible. When `false`, incompatibility is an error. |
+| `travel_time.auto_rebuild` | `true` | Rebuild an existing table when its model hash, geometry, Earth radius, spacing, or catalog/initialized-seed coverage is incompatible. When `false`, incompatibility is an error. |
 | `travel_time.clamp_to_grid` | `true` | If a nonlinear update moves an event just outside the table, evaluate at the nearest boundary instead of returning a non-finite time. This avoids an abrupt failure, but repeated boundary locations mean the table should be enlarged and rebuilt. |
 | `travel_time.vp_ms` | `6000.0` | P velocity in m/s, used only when `type = "constant"`. |
 | `travel_time.vs_ms` | `3464.0` | S velocity in m/s, used only when `type = "constant"`. |
@@ -136,7 +177,7 @@ build_geometry = "radial"
 
 Once created, the `.gstt` header remembers that it is radial.
 
-## 8. Native lookup-table grid: `[lookup]`
+## 9. Native lookup-table grid: `[lookup]`
 
 Smaller spacing improves table resolution but increases build time and disk
 size. Approximate stored size is
@@ -147,7 +188,7 @@ size. Approximate stored size is
 | `lookup.horizontal_step_m` | `125.0` | Horizontal range spacing in metres. In radial mode this is a surface-arc spacing converted internally to angle. Changing it makes an existing table incompatible. |
 | `lookup.depth_step_m` | `50.0` | Event-depth grid spacing in metres. It also sets the finest available station-depth spacing. |
 | `lookup.station_depth_step_m` | `100.0` | Requested maximum spacing between station-depth slices. It must be at least `depth_step_m`; endpoint alignment may make actual spacing finer. More slices improve elevation interpolation but cost proportionally more time and disk. |
-| `lookup.maximum_distance_km` | `0.0` | Table range. Zero derives it from the largest seed-event-to-station distance plus a margin. A positive explicit value must cover every seed event/station pair. This is unrelated to `graph.maximum_distance_km`. |
+| `lookup.maximum_distance_km` | `0.0` | Table range. Zero derives it from the largest event-to-station distance across both the input catalog and initialized seed, plus a margin. A positive explicit value must cover both. This is unrelated to `graph.maximum_distance_km`. |
 | `lookup.minimum_depth_km` | `0.0` | Shallow table limit. Zero automatically includes the shallowest model node, station, and seed event. A nonzero value is explicit; negative values are useful for stations above sea level. |
 | `lookup.maximum_depth_km` | `0.0` | Deep table limit. Zero chooses an automatic limit; a positive value is explicit and must contain all seed events and stations. |
 | `lookup.distance_margin_km` | `1.0` | Extra range used only when `maximum_distance_km = 0`. The builder uses at least two horizontal grid cells even if this margin is smaller. |
@@ -158,7 +199,7 @@ size. Approximate stored size is
 | `lookup.maximum_table_gib` | `8.0` | Safety limit on the estimated P+S cube size in GiB. |
 | `lookup.allow_large_table` | `false` | Permit a table above `maximum_table_gib`. Set only after checking available disk, build time, and memory pressure. |
 
-## 9. Stage 1 and Stage 2 solver settings
+## 10. Stage 1 and Stage 2 solver settings
 
 `[prelocation]` controls the optional theta-reference Stage 1.
 `[relocation]` controls the final sparse event-pair Stage 2. The same setting
@@ -198,7 +239,7 @@ These values are five times the defaults. They are a diagnostic trial, not a
 universal setting: compare movement, residual, and benchmark/independent
 location evidence before accepting the more strongly damped result.
 
-## 10. Observation selection: `[observations]`
+## 11. Observation selection: `[observations]`
 
 Here, one “observation” means one station–phase contribution, such as P at
 station ABC for a particular event pair. It does not mean one earthquake.
@@ -216,7 +257,7 @@ Start with the defaults. Relaxing filters increases coverage but may introduce
 poor DDSync constraints; tightening them improves selectivity but can leave
 events unchanged or split the usable catalog.
 
-## 11. Reference frame and pinned events: `[gauge]`
+## 12. Reference frame and pinned events: `[gauge]`
 
 Relative times alone do not define every possible common shift of the model.
 The gauge tells GraphSplit how to choose a stable reference frame. You do not
@@ -227,11 +268,11 @@ or have trusted event locations.
 | --- | --- | --- |
 | `gauge.mode` | `"zero_mean"` | `zero_mean` adds a weak/common-shift reference described below. `pin` holds selected event fields exactly fixed. |
 | `gauge.zero_mean` | `"origin_time"` | Used in zero-mean mode. `origin_time` removes only the common relative-time shift. `xyzt0_scaled` also discourages a common spatial translation after converting metres to seconds with `reference_velocity_ms`; it is useful for a weakly anchored first pass. `xyzt0` is unscaled and should normally be avoided. |
-| `gauge.constraint_weight` | 10.0 | Strength of the zero-mean constraint relative to observations. It is not the same as damping. Larger values enforce the selected mean update more strongly. The origin-time mean is also recentered exactly after each iteration. |
+| `gauge.constraint_weight` | 10.0 | Strength of the zero-mean constraint relative to observations. It is not the same as damping. Larger values enforce the selected mean update more strongly. The origin-time mean is also recentered exactly after each iteration. It has no effect on fields removed by hard pinning. |
 | `gauge.reference_velocity_ms` | 5000.0 | Metres-to-seconds scaling for `zero_mean = "xyzt0_scaled"`. It has no effect in other gauge choices. |
 | `gauge.pin_event_ids` | `[]` | Persistent serial `EventID` values to hold fixed in pin mode, for example `[3, 50, 67]`. These are IDs from the configured catalog ID column—not row numbers. At least one is required when `mode = "pin"`. |
 | `gauge.pin_fields` | `"xyz"` | Fields fixed for each listed event: any combination of `x`, `y`, `z`, and `t0`, such as `"xy"`, `"z"`, or `"xyzt0"`. `xyz` fixes the location but still solves relative origin time. |
-| `gauge.pin_reference_catalog` | `""` | Optional catalog supplying trusted latitude/longitude/depth for pinned IDs. Empty means pin at the locations in `io.catalog_file`. The trusted file may contain only the pinned events and may use any row order, but it must use the same column layout configured under `[catalog]` and contain every listed serial ID. Trusted catalog date/time fields are not imported; a pinned `t0` is held at GraphSplit's initial relative value of zero. |
+| `gauge.pin_reference_catalog` | `""` | Optional catalog supplying trusted latitude/longitude/depth for pinned IDs. Empty means pin at the in-memory seed: normally `io.catalog_file`, or the common seed selected by `[initialization]`. The trusted file may contain only the pinned events and may use any row order, but it must use the same column layout configured under `[catalog]` and contain every listed serial ID. Trusted catalog date/time fields are not imported; a pinned `t0` is held at GraphSplit's initial relative value of zero. |
 
 ### Trusted catalog example
 
@@ -259,7 +300,26 @@ need to occupy positions 3, 50, and 67, and the other 997 events do not need to
 appear. “Same ID” means that the final values `3`, `50`, and `67` match the
 working catalog.
 
-## 12. Choosing nearby event pairs: `[graph]`
+### Why a displaced pin does not translate the catalog
+
+Hard pins are exact: Huber weighting cannot move a pinned field. However,
+moving only one event or a small subset to a distant absolute position and
+pinning it is not a reliable way to shift the remaining swarm. The links from
+the displaced events acquire large residuals, robust weighting can reduce
+their leverage severely, and the event graph built after Stage 1 may place the
+pins in a separate component. Increasing damping cannot transmit an absolute
+shift across downweighted or missing connections.
+
+Use `common_centroid` or `common_manual` when the objective is a full location
+without individual input hypocenters. Reserve pins for trusted constraints in
+a consistently initialized, connected catalog. If a displaced-pin sensitivity
+test is attempted anyway, use `pin_fields = "xyz"`, set both
+`prelocation.huber_k` and `relocation.huber_k` to a very large value, and verify
+in `catalog_dd_graphmeta.csv` that the pins belong to the main retained
+component. A very large Huber threshold disables most robust downweighting and
+is appropriate here only as a diagnostic.
+
+## 13. Choosing nearby event pairs: `[graph]`
 
 GraphSplit does not compare every event with every other event. For each event
 it finds a limited number of nearby candidates, producing a sparse list of
@@ -286,7 +346,7 @@ Practical interpretation of the run message:
 - Use `catalog_dd_graphmeta.csv` to distinguish geometric connections from
   event pairs that survived measurement filters.
 
-## 13. Optional graph augmentation: `[graph.augmentation]`
+## 14. Optional graph augmentation: `[graph.augmentation]`
 
 Augmentation is an advanced, normally disabled step. It looks through a broader
 nearby-pair pool and adds a small number of connections intended to strengthen
@@ -332,7 +392,7 @@ maximum_added_per_event = 3
 Leave augmentation off unless ordinary graph settings and diagnostics show a
 specific connectivity weakness. It is not a general “improve locations” switch.
 
-## 14. Output switches: `[output]`
+## 15. Output switches: `[output]`
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -343,7 +403,82 @@ specific connectivity weakness. It is not a general “improve locations” swit
 
 These switches affect files only, not the location solution.
 
-## 15. Experimental theta-bias diagnostic: `[experimental.bias]`
+## 16. Error and stability estimates: `[uncertainty]`
+
+Uncertainty calculations run only after the ordinary all-data relocation has
+finished. They write separate, serial-ID-keyed files and never add columns to
+`catalog_dd.txt` or `catalog_dd_filt.txt`.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `uncertainty.method` | `"none"` | `none` writes no uncertainty products; `linearized` writes the inexpensive regularized inverse-Hessian estimate; `bootstrap` runs station-phase resampling; `both` does both. The location catalogs are identical for all four choices. |
+
+### Regularized linearized estimate: `[uncertainty.linearized]`
+
+This calculation freezes the final robust weights and travel-time derivatives,
+then estimates each event's spatial block of the inverse damped Hessian. It is
+conditional on the velocity model, selected event graph, final linearization,
+thetaStd weights, gauge, pins, and damping. It is therefore a useful formal
+resolution/error measure, not a complete statement of hypocentral uncertainty.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `uncertainty.linearized.probes` | 12 | Random sign probes per spatial column. Each probe costs three PCG solves—one each for x, y, and z. More probes reduce random noise in the estimated 3×3 blocks but cost proportionally more. |
+| `uncertainty.linearized.seed` | 24680 | Random seed for reproducible probes. It does not affect the relocated catalog. |
+| `uncertainty.linearized.inner_tolerance` | 1.0e-3 | Relative PCG tolerance for uncertainty solves. This can be looser than relocation because randomized estimation already has sampling error. |
+| `uncertainty.linearized.inner_max_iterations` | 150 | Maximum PCG iterations per randomized solve. Nonconverged solves are omitted and the converged count is printed. |
+
+The output `linerrxyz.txt` contains only filtered Stage-2 serial IDs. Columns
+are `EventID`, x/y/z standard deviations in metres, and the six unique terms of
+the local east/north/depth covariance matrix in square metres. Spatially pinned
+coordinates have zero formal spread because they were fixed, not because their
+true locations are known without error.
+
+### Block bootstrap: `[uncertainty.bootstrap]`
+
+The bootstrap samples complete DDSync theta groups with replacement and reruns
+the nonlinear Stage-2 relocation from the all-data solution. It keeps the
+nominal event graph and nominal observation-support filtering fixed. This
+isolates sensitivity to station-phase sampling without allowing duplicated
+blocks to pass a support threshold by being counted as independent geometry.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `uncertainty.bootstrap.replicates` | 100 | Number of nonlinear bootstrap relocations. Values around 100 are useful for initial assessment; stable tail percentiles may require more. Runtime is roughly proportional to this number. |
+| `uncertainty.bootstrap.resampling_unit` | `"station_phase"` | `station_phase` treats one complete station–phase theta file as a block and is recommended. `station` keeps P and S together, but dropping whole stations can leave sparse networks with too little geometry and unstable replicates. |
+| `uncertainty.bootstrap.seed` | 12345 | Random seed for reproducible block multiplicities. |
+| `uncertainty.bootstrap.summary_method` | `"percentile"` | `percentile` reports an axis-wise central interval; `standard_deviation` reports the bootstrap mean plus/minus a configurable multiple of sample standard deviation. These summaries do not replace the saved samples. Aliases `std` and `2std` are accepted for `standard_deviation`. |
+| `uncertainty.bootstrap.confidence_level` | 0.95 | Central probability used by `percentile`; 0.95 gives the 2.5th and 97.5th percentiles. Ignored by `standard_deviation`. |
+| `uncertainty.bootstrap.standard_deviation_multiplier` | 2.0 | Multiplier used by `standard_deviation`; 2.0 gives mean ± 2 sample standard deviations. Ignored by `percentile`. |
+| `uncertainty.bootstrap.write_samples` | `true` | Write wide longitude, latitude, depth, and internal relative-origin-time tables. Each row begins with `EventID` and the all-data value, followed by every bootstrap realization. |
+| `uncertainty.bootstrap.write_catalogs` | `false` | Also write one ordinary filtered catalog per converged replicate under `bootstrap_catalogs/`. This can create many large files and is normally unnecessary because the wide tables retain every sampled location. |
+
+`booterrxyz.txt` contains axis-wise offset summaries and the empirical local
+x/y/z covariance. Its offsets are relative to the all-data `catalog_dd` result.
+The four `bootstrap_samples_*.txt` files are the primary uncertainty product:
+they preserve skewed, irregular, or multimodal sample clouds that an ellipse or
+one number per axis would conceal. An event with no resampled observations in a
+replicate is written as `NaN`, rather than being left at the all-data location
+and incorrectly appearing to have zero uncertainty.
+`bootstrap_block_counts.txt` records the integer multiplicity of every named
+station-phase (or station) block in every replicate, so the resampling itself
+can be audited independently of the random seed.
+
+Samples are held in a temporary disk-backed array rather than resident RAM, so
+bootstrap storage does not scale up the solver's memory use. Temporary binary
+space is approximately `32 × filtered_events × replicates` bytes for x, y, z,
+and t0, in addition to the final text files. For example, one million filtered
+events and 100 replicates require about 3.2 GB of temporary disk. Setting
+`write_samples = false` suppresses the final wide tables but the temporary
+store is still needed to calculate percentile summaries.
+
+The bootstrap is conditional on the theta products supplied to GraphSplit. It
+does not represent velocity-model uncertainty, and it does not reproduce the
+uncertainty introduced while DDSync estimated theta. A fully end-to-end study
+would resample the original differential-time data, rerun DDSync, and then rerun
+GraphSplit.
+
+## 17. Experimental theta-bias diagnostic: `[experimental.bias]`
 
 This entire section is deliberately absent from the minimal TOML. The feature
 has not shown a consistent location benefit and should not be part of a default
@@ -362,7 +497,7 @@ scientific workflow.
 
 Always retain and report an uncorrected baseline if this experiment is used.
 
-## 16. Complete worked configurations
+## 18. Complete worked configurations
 
 ### Basic run with visible damping
 
@@ -385,7 +520,7 @@ new run using the first output as its seed.
 
 ### Trusted partial pins
 
-Use the three-line example in Section 11. The trusted file does not need to be
+Use the three-line example in Section 12. The trusted file does not need to be
 a duplicate of the complete working catalog.
 
 ### Reproducibility

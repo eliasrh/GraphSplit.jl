@@ -15,7 +15,11 @@
 - PCG recovery for a known positive-definite system;
 - launcher argument parsing and a zero-error benchmark-comparator smoke test;
 - complete TOML documentation coverage, visible minimal damping, and
-  unambiguous augmentation target validation.
+  unambiguous augmentation/uncertainty validation;
+- common-centroid/manual initialization, its Stage-1 requirement, and lookup
+  coverage of overridden manual seeds;
+- exact station-phase bootstrap multiplicities, sample quantiles/covariances,
+  and serial-ID-keyed uncertainty sidecar formats.
 
 Run it with `julia --project=. -e 'using Pkg; Pkg.test()'`. GitHub Actions runs
 the same suite on Julia 1.10 and the current stable Julia release.
@@ -37,6 +41,8 @@ For a new field dataset, validate in this order:
 5. test pins only when their serial IDs and reference locations are trusted;
 6. treat bias-corrected results as an experiment, and retain the uncorrected
    solution as the baseline.
+7. for a published uncertainty result, inspect bootstrap sample clouds and the
+   valid-replicate fraction rather than relying only on covariance summaries.
 
 ## Current execution boundary
 

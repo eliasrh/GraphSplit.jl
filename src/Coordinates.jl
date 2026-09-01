@@ -36,6 +36,16 @@ function choose_reference(stations::Stations, catalog::Catalog, cfg::AbstractDic
     error("Unknown coordinates.reference: $mode")
 end
 
+function catalog_depth_to_internal(depth_km, cfg::AbstractDict)
+    vertical = lowercase(String(cfgget(cfg, "coordinates", "event_vertical"; default="positive_depth")))
+    z0 = Float64(cfgget(cfg, "coordinates", "event_z0_m"; default=0.0))
+    depth_m = Float64.(depth_km) .* 1000.0
+    return vertical == "positive_depth" ? depth_m :
+        vertical == "negative_depth" ? -depth_m :
+        vertical == "positive_depth_plus_z0" ? depth_m .+ z0 :
+        error("Unknown coordinates.event_vertical: $vertical")
+end
+
 "Attach a reproducible local coordinate frame and return the initial relocation state."
 function attach_coordinates!(stations::Stations, catalog::Catalog, cfg::AbstractDict)
     lat0, lon0 = choose_reference(stations, catalog, cfg)
@@ -50,17 +60,37 @@ function attach_coordinates!(stations::Stations, catalog::Catalog, cfg::Abstract
         station_vertical == "elevation" ? copy(stations.elev_m) :
         error("Unknown coordinates.station_vertical: $station_vertical")
 
-    event_vertical = lowercase(String(cfgget(cfg, "coordinates", "event_vertical"; default="positive_depth")))
-    z0 = Float64(cfgget(cfg, "coordinates", "event_z0_m"; default=0.0))
-    event_z = event_vertical == "positive_depth" ? catalog.depth_km .* 1000.0 :
-        event_vertical == "negative_depth" ? -catalog.depth_km .* 1000.0 :
-        event_vertical == "positive_depth_plus_z0" ? catalog.depth_km .* 1000.0 .+ z0 :
-        error("Unknown coordinates.event_vertical: $event_vertical")
+    event_z = catalog_depth_to_internal(catalog.depth_km, cfg)
 
     stations.ref_lat = catalog.ref_lat = lat0
     stations.ref_lon = catalog.ref_lon = lon0
     stations.ref_radius_m = catalog.ref_radius_m = radius
     return State(copy(catalog.event_id), catalog_x, catalog_y, event_z, zeros(length(catalog)), lat0, lon0, radius)
+end
+
+"Override catalog hypocenters with one common Stage-1 seed when requested."
+function apply_initialization!(state::State, cfg::AbstractDict)
+    mode = lowercase(String(cfgget(cfg, "initialization", "mode"; default="catalog")))
+    mode == "catalog" && return state
+    if mode == "common_centroid"
+        n = length(state)
+        common_x = sum(state.x) / n
+        common_y = sum(state.y) / n
+        common_z = sum(state.z) / n
+    elseif mode == "common_manual"
+        latitude = Float64(cfgget(cfg, "initialization", "latitude"))
+        longitude = Float64(cfgget(cfg, "initialization", "longitude"))
+        common_x, common_y = local_xy(latitude, longitude,
+            state.ref_lat, state.ref_lon, state.ref_radius_m)
+        common_z = catalog_depth_to_internal(Float64(cfgget(cfg, "initialization", "depth_km")), cfg)
+    else
+        error("Unknown initialization.mode: $mode")
+    end
+    fill!(state.x, common_x)
+    fill!(state.y, common_y)
+    fill!(state.z, common_z)
+    fill!(state.t0, 0.0)
+    return state
 end
 
 "Exact spherical central angle and derivatives with respect to event local x/y."

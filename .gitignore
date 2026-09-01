@@ -1,0 +1,10 @@
+graphsplit_output/
+lookuptable/
+*.gstt
+*.gstt.tmp
+*.log
+.bootstrap_samples_work.bin
+benchmark/yifan2025/input/yifan_benchmark_*.csv
+.DS_Store
+/Manifest.toml
+/Manifest-v*.toml

@@ -84,6 +84,29 @@ end
 
         cfg["relocation"]["damping_lambda"] = -1.0
         @test_throws ErrorException GraphSplit.validate_config(cfg)
+
+        cfg = GraphSplit.default_config()
+        cfg["uncertainty"]["method"] = "both"
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["uncertainty"]["bootstrap"]["resampling_unit"] = "event"
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["uncertainty"]["bootstrap"]["resampling_unit"] = "station_phase"
+        cfg["uncertainty"]["bootstrap"]["confidence_level"] = 1.0
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+
+        cfg = GraphSplit.default_config()
+        cfg["initialization"]["mode"] = "common_centroid"
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["run"]["prelocation"] = false
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["run"]["prelocation"] = true
+        cfg["initialization"]["mode"] = "common_manual"
+        cfg["initialization"]["latitude"] = 91.0
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["initialization"]["latitude"] = 35.9
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["initialization"]["mode"] = "one_event"
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
     end
 
     @testset "coordinates" begin
@@ -103,6 +126,46 @@ end
         fym = GraphSplit.spherical_delta_gradient(args[1], args[2] - h, args[3:end]...)[1]
         @test gx ≈ (fxp - fxm) / (2h) rtol=1.0e-5 atol=1.0e-12
         @test gy ≈ (fyp - fym) / (2h) rtol=1.0e-5 atol=1.0e-12
+
+        raw = zeros(3, 10)
+        raw[:, 7] .= [35.9, 36.0, 36.1]
+        raw[:, 8] .= [-117.8, -117.7, -117.6]
+        raw[:, 9] .= [4.0, 5.0, 9.0]
+        raw[:, 10] .= [10, 20, 30]
+        catalog = GraphSplit.Catalog("memory", raw, Int64[10, 20, 30], raw[:, 7], raw[:, 8], raw[:, 9],
+            7, 8, 9, 10, NaN, NaN, 6_371_000.0)
+        stations = GraphSplit.Stations(["STA"], [36.0], [-117.7], [0.0], [0.0], [0.0], [0.0],
+            NaN, NaN, 6_371_000.0)
+        cfg = GraphSplit.default_config()
+        cfg["coordinates"]["reference"] = "manual"
+        cfg["coordinates"]["reference_latitude"] = 36.0
+        cfg["coordinates"]["reference_longitude"] = -117.7
+
+        catalog_state = GraphSplit.attach_coordinates!(stations, catalog, cfg)
+        expected_centroid = (sum(catalog_state.x) / 3, sum(catalog_state.y) / 3,
+            sum(catalog_state.z) / 3)
+        cfg["initialization"]["mode"] = "common_centroid"
+        centroid_state = GraphSplit.apply_initialization!(GraphSplit.copy_state(catalog_state), cfg)
+        @test all(==(expected_centroid[1]), centroid_state.x)
+        @test all(==(expected_centroid[2]), centroid_state.y)
+        @test all(==(expected_centroid[3]), centroid_state.z)
+        @test all(iszero, centroid_state.t0)
+
+        cfg["initialization"]["mode"] = "common_manual"
+        cfg["initialization"]["latitude"] = 36.05
+        cfg["initialization"]["longitude"] = -117.65
+        cfg["initialization"]["depth_km"] = 6.25
+        manual_state = GraphSplit.apply_initialization!(GraphSplit.copy_state(catalog_state), cfg)
+        manual_x, manual_y = GraphSplit.local_xy(36.05, -117.65, 36.0, -117.7, 6_371_000.0)
+        @test manual_state.x == fill(manual_x, 3)
+        @test manual_state.y == fill(manual_y, 3)
+        @test manual_state.z == fill(6250.0, 3)
+
+        original_range = GraphSplit.required_range(stations, catalog, catalog_state, :cartesian, 6_371_000.0)
+        manual_state.x .= 200_000.0
+        manual_range = GraphSplit.required_range(stations, catalog, manual_state, :cartesian, 6_371_000.0)
+        @test manual_range > original_range
+        @test manual_range >= 200_000.0
     end
 
     @testset "exact k-d tree" begin
@@ -228,6 +291,61 @@ end
         @test converged
         @test iterations <= 2
         @test solution ≈ truth atol=1.0e-12
+    end
+
+    @testset "uncertainty resampling and sidecars" begin
+        empty_entries = Dict{Int64,GraphSplit.ThetaEntry}()
+        groups = [
+            GraphSplit.ThetaGroup("STA", UInt8(1), "theta_STA_P.txt", Int64[], copy(empty_entries), false, false),
+            GraphSplit.ThetaGroup("STA", UInt8(2), "theta_STA_S.txt", Int64[], copy(empty_entries), false, false),
+            GraphSplit.ThetaGroup("STB", UInt8(1), "theta_STB_P.txt", Int64[], copy(empty_entries), false, false),
+        ]
+        obs = GraphSplit.Observations(Int32[1, 1, 1, 2], Int32[2, 2, 2, 3],
+            [0.1, 0.2, 0.3, 0.4], fill(0.01, 4), Int32[1, 1, 1, 2],
+            UInt8[1, 1, 2, 1], Int32[1, 1, 2, 3])
+        station_phase_blocks, station_phase_labels = GraphSplit.bootstrap_blocks(obs, groups, "station_phase")
+        @test station_phase_blocks == Int32[1, 1, 2, 3]
+        @test station_phase_labels == ["theta_STA_P.txt", "theta_STA_S.txt", "theta_STB_P.txt"]
+        station_blocks, station_labels = GraphSplit.bootstrap_blocks(obs, groups, "station")
+        @test station_blocks == Int32[1, 1, 1, 2]
+        @test station_labels == ["STA", "STB"]
+
+        sampled = GraphSplit.resample_observations(obs, station_phase_blocks, [2, 0, 1])
+        @test length(sampled) == 5
+        @test count(==(Int32(1)), sampled.group) == 4
+        @test count(==(Int32(2)), sampled.group) == 0
+        @test count(==(Int32(3)), sampled.group) == 1
+        counts = GraphSplit.draw_bootstrap_counts(MersenneTwister(12), 7)
+        @test sum(counts) == 7
+        @test length(counts) == 7
+
+        @test GraphSplit.sample_quantile([0.0, 10.0], 0.25) == 2.5
+        covariance = GraphSplit.sample_covariance3([-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0])
+        @test covariance ≈ [2.0 4.0 6.0; 4.0 8.0 12.0; 6.0 12.0 18.0]
+
+        mktempdir() do directory
+            ids = Int64[10, 20]
+            mask = BitVector([false, true])
+            linear_covariance = fill(NaN, 3, 3, 2)
+            linear_covariance[:, :, 2] .= Diagonal([1.0, 4.0, 9.0])
+            estimate = (covariance=linear_covariance,)
+            linear_path = joinpath(directory, "linerrxyz.txt")
+            GraphSplit.write_linearized_uncertainty(linear_path, ids, mask, estimate)
+            linear_lines = readlines(linear_path)
+            @test length(linear_lines) == 2
+            @test startswith(linear_lines[2], "20 1 2 3 ")
+
+            nominal = GraphSplit.State(ids, [0.0, 100.0], [0.0, 200.0], [0.0, 300.0],
+                zeros(2), 36.0, -117.0, 6_371_000.0)
+            samples = (x=[99.0 100.0 102.0], y=[198.0 200.0 204.0],
+                z=[297.0 300.0 306.0], t0=zeros(1, 3))
+            cfg = GraphSplit.default_config()
+            summary_path = joinpath(directory, "booterrxyz.txt")
+            GraphSplit.write_bootstrap_summary(summary_path, ids, [2], nominal, samples, 3, cfg)
+            summary_lines = readlines(summary_path)
+            @test length(summary_lines) == 2
+            @test split(summary_lines[2])[1:3] == ["20", "3", "1.00000000"]
+        end
     end
 
     @testset "bundled benchmark inputs" begin

@@ -14,12 +14,7 @@ function apply_pin_reference!(state::State, stations::Stations, cfg::AbstractDic
     reference = read_catalog(reference_path, cfg)
     reference_x, reference_y = local_xy(reference.lat, reference.lon,
         state.ref_lat, state.ref_lon, state.ref_radius_m)
-    event_vertical = lowercase(String(cfgget(cfg, "coordinates", "event_vertical"; default="positive_depth")))
-    z0 = Float64(cfgget(cfg, "coordinates", "event_z0_m"; default=0.0))
-    reference_z = event_vertical == "positive_depth" ? reference.depth_km .* 1000.0 :
-        event_vertical == "negative_depth" ? -reference.depth_km .* 1000.0 :
-        event_vertical == "positive_depth_plus_z0" ? reference.depth_km .* 1000.0 .+ z0 :
-        error("Unknown coordinates.event_vertical: $event_vertical")
+    reference_z = catalog_depth_to_internal(reference.depth_km, cfg)
     ref_rows = Dict(id => row for (row, id) in enumerate(reference.event_id))
     state_rows = Dict(id => row for (row, id) in enumerate(state.event_id))
     pin_ids = Int64.(cfgget(cfg, "gauge", "pin_event_ids"; default=Int[]))
@@ -44,11 +39,13 @@ function write_summary(path::AbstractString, cfg::AbstractDict, catalog::Catalog
             "config_file" => String(get(cfg, "_config_file", ""))),
         "inputs" => Dict("events" => length(catalog), "stations" => length(stations), "theta_groups" => length(groups)),
         "travel_time" => Dict("geometry" => geometry, "type" => travel_time isa TravelTimeTable ? "lookup" : "constant"),
+        "initialization" => Dict("mode" => String(cfgget(cfg, "initialization", "mode"; default="catalog"))),
         "prelocation" => Dict("observations" => length(pre), "iterations" => pre_stats.iterations,
             "final_robust_rms_s" => isempty(pre_stats.rms_s) ? NaN : pre_stats.rms_s[end]),
         "relocation" => Dict("graph_edges" => length(graph), "graph_components" => graph.ncomp,
             "observations" => length(dd), "iterations" => dd_stats.iterations,
             "final_robust_rms_s" => isempty(dd_stats.rms_s) ? NaN : dd_stats.rms_s[end]),
+        "uncertainty" => Dict("method" => String(cfgget(cfg, "uncertainty", "method"; default="none"))),
     )
     open(path, "w") do io
         TOML.print(io, summary; sorted=true)
@@ -59,6 +56,8 @@ function build_travel_times(cfg::Dict{String,Any}; force::Bool=true)
     catalog = read_catalog(String(cfgget(cfg, "io", "catalog_file")), cfg)
     stations = read_stations(String(cfgget(cfg, "io", "stations_file")))
     state = attach_coordinates!(stations, catalog, cfg)
+    apply_initialization!(state, cfg)
+    apply_pin_reference!(state, stations, cfg)
     table = prepare_travel_time(cfg, stations, catalog, state; force_build=force)
     table isa TravelTimeTable && @printf("Travel-time table ready: %s (%s)\n", table.file, string(table.geometry))
     return table
@@ -70,6 +69,7 @@ function run(cfg::Dict{String,Any})
     catalog = read_catalog(String(cfgget(cfg, "io", "catalog_file")), cfg)
     stations = read_stations(String(cfgget(cfg, "io", "stations_file")))
     initial = attach_coordinates!(stations, catalog, cfg)
+    apply_initialization!(initial, cfg)
     apply_pin_reference!(initial, stations, cfg)
     travel_time = prepare_travel_time(cfg, stations, catalog, initial)
     if Bool(cfgget(cfg, "run", "build_travel_times_only"; default=false))
@@ -88,6 +88,8 @@ function run(cfg::Dict{String,Any})
         println("\n=== Stage 1: theta prelocation ===")
         pre_observations = build_star_observations(groups, stations, catalog, cfg)
         if isempty(pre_observations)
+            lowercase(String(cfgget(cfg, "initialization", "mode"; default="catalog"))) == "catalog" ||
+                error("No Stage-1 observations survived, so the common initial hypocenter cannot be separated into an event graph")
             @warn "No Stage-1 observations survived; using the input catalog as the Stage-2 seed"
             pre_state = copy_state(initial)
             pre_stats = SolveStats(0, Float64[], Float64[], Float64[], Int[], true)
@@ -123,6 +125,21 @@ function run(cfg::Dict{String,Any})
     if Bool(cfgget(cfg, "output", "write_solver_history"; default=true))
         write_solver_history(joinpath(output, "solver_history.csv"), pre_stats, dd_stats)
     end
+    uncertainty_method = lowercase(String(cfgget(cfg, "uncertainty", "method"; default="none")))
+    linearized_uncertainty = nothing
+    bootstrap_uncertainty = nothing
+    if uncertainty_method in ("linearized", "both")
+        println("\n=== Uncertainty: regularized linearized covariance ===")
+        linearized_uncertainty = estimate_linearized_uncertainty(dd_state, stations, dd_observations,
+            travel_time, dd_mask, cfg)
+        write_linearized_uncertainty(joinpath(output, "linerrxyz.txt"), catalog.event_id,
+            dd_mask, linearized_uncertainty)
+    end
+    if uncertainty_method in ("bootstrap", "both")
+        println("\n=== Uncertainty: station-phase block bootstrap ===")
+        bootstrap_uncertainty = run_bootstrap_uncertainty(catalog, groups, dd_state, stations,
+            dd_observations, travel_time, dd_mask, output, cfg)
+    end
     bias_report = NamedTuple[]
     if Bool(cfgget(cfg, "experimental", "bias", "enabled"; default=false))
         println("\n=== Experimental diagnostic: theta bias scan ===")
@@ -137,5 +154,6 @@ function run(cfg::Dict{String,Any})
     @printf("\nGraphSplit complete. Outputs: %s\n", output)
     return (catalog=catalog, stations=stations, groups=groups, pre_state=pre_state, dd_state=dd_state,
         graph=graph, pre_observations=pre_observations, dd_observations=dd_observations,
-        pre_stats=pre_stats, dd_stats=dd_stats, bias_report=bias_report, output_dir=output)
+        pre_stats=pre_stats, dd_stats=dd_stats, linearized_uncertainty=linearized_uncertainty,
+        bootstrap_uncertainty=bootstrap_uncertainty, bias_report=bias_report, output_dir=output)
 end

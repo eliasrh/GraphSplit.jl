@@ -63,9 +63,37 @@ The configured output directory contains:
 - `solver_history.csv`, with nonlinear and PCG convergence history;
 - `run_summary.toml`, with the run's core counts and final residuals.
 
+When requested with `[uncertainty]`, catalogs remain unchanged and additional
+sidecars are written:
+
+- `linerrxyz.txt`, containing regularized linearized x/y/z standard deviations
+  and covariance terms for filtered serial IDs;
+- `booterrxyz.txt`, containing bootstrap interval/covariance summaries;
+- `bootstrap_samples_lon.txt`, `bootstrap_samples_lat.txt`,
+  `bootstrap_samples_depth_km.txt`, and `bootstrap_samples_t0_s.txt`, with the
+  all-data solution and every station-phase bootstrap realization;
+- `bootstrap_replicates.txt`, `bootstrap_block_counts.txt`, and
+  `bootstrap_metadata.toml`, recording convergence, exact block multiplicities,
+  and the interpretation of the bootstrap.
+
 The catalog date/time and auxiliary columns are preserved. GraphSplit's
 internal origin-time adjustments are relative nuisance parameters and are not
 written into columns 1–6, matching the MATLAB implementation.
+
+To retain empirical location clouds without changing the catalog format:
+
+```toml
+[uncertainty]
+method = "bootstrap"
+
+[uncertainty.bootstrap]
+replicates = 100
+resampling_unit = "station_phase"
+write_samples = true
+```
+
+The bootstrap is optional because it reruns Stage 2 once per replicate. Use
+`method = "linearized"` for the cheaper formal estimate, or `method = "both"`.
 
 ## Cartesian and radial travel times
 
@@ -89,12 +117,17 @@ build_geometry = "radial" # or "cartesian"
 header. MATLAB `.mat` lookup tables are intentionally not accepted: the native
 format records provenance and can be memory-mapped safely.
 
-## Basic, iterated, and pinned runs
+## Basic, common-seed, iterated, and pinned runs
 
-The same runner covers all three cases; there are no divergent example
+The same runner covers all four cases; there are no divergent example
 programs to maintain.
 
 - Basic: use the template TOML unchanged apart from paths and grid/graph scale.
+- Common seed: set `initialization.mode = "common_centroid"` to start every
+  event at the input catalog centroid, or `"common_manual"` to specify one
+  latitude, longitude, and depth. Stage 1 is required and separates the events
+  before Stage 2 constructs the sparse graph. This permits a complete location
+  without single-event catalog hypocenters.
 - Iterated: run once, then use the first pass's `catalog_dd.txt` as the second
   pass `io.catalog_file`, select a new output directory, and set
   `run.prelocation = false`. A broad first graph and tighter second graph are a
@@ -102,6 +135,13 @@ programs to maintain.
 - Pinned: set `gauge.mode = "pin"`, list exact serial IDs in
   `gauge.pin_event_ids`, and choose `gauge.pin_fields`. Optionally provide a
   trusted same-ID catalog in `gauge.pin_reference_catalog`.
+
+Pinning one or a few events after moving only those events is not a reliable
+way to translate an entire catalog. The pin itself is exact, but the resulting
+large residuals can be strongly Huber-downweighted and the displaced pins can
+be isolated when the Stage-2 graph is built. Use common initialization when
+the problem is an inadequate seed catalog; use pins only as explicit trusted
+constraints within a consistently initialized, connected solution.
 
 Copy-ready TOML fragments are in [examples/README.md](examples/README.md). Every
 TOML key—including units, zero behavior, interactions, tuning advice, and

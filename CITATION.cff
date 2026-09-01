@@ -7,11 +7,11 @@ authors:
     given-names: "Elías Rafn"
     affiliation: "Institute of Earth Sciences, University of Iceland"
     orcid: "https://orcid.org/0000-0001-8342-7226"
-repository-code: "https://github.com/eliasrh/GraphSplit"
-url: "https://github.com/eliasrh/GraphSplit"
+repository-code: "https://github.com/eliasrh/GraphSplit.jl"
+url: "https://github.com/eliasrh/GraphSplit.jl"
 license: "LicenseRef-GraphSplit-NonCommercial-1.0"
-version: "0.1.3"
-date-released: "2026-08-13"
+version: "0.2.0"
+date-released: "2026-09-01"
 keywords:
   - seismology
   - earthquake relocation
@@ -23,5 +23,6 @@ abstract: >
   GraphSplit is a standard-library-only Julia implementation of sparse,
   graph-based earthquake relocation from synchronized DDSync theta data. It
   includes native Cartesian and radial layered-model travel-time builders,
-  robust matrix-free inversion, serial-ID-safe input handling, and TOML-driven
-  reproducible runs.
+  robust matrix-free inversion, serial-ID-safe catalog/common initialization,
+  conditional station-phase bootstrap and linearized uncertainty, and
+  TOML-driven reproducible runs.

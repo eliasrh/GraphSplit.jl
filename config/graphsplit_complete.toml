@@ -34,6 +34,14 @@ depth_column = 9
 # -1 is the final column. IDs must be unique positive integers.
 event_id_column = -1
 
+[initialization]
+# catalog | common_centroid | common_manual. Common modes require Stage 1.
+mode = "catalog"
+# Used only by common_manual; this is a starting guess, not a fixed location.
+latitude = 0.0
+longitude = 0.0
+depth_km = 0.0
+
 [coordinates]
 # Local x/y origin: stations_mean | catalog_mean | manual.
 reference = "stations_mean"
@@ -222,6 +230,37 @@ write_graph_metadata = true
 write_solver_history = true
 # Write core counts and final residuals to run_summary.toml.
 write_run_summary = true
+
+[uncertainty]
+# none | linearized | bootstrap | both. Uncertainty files never alter catalogs.
+method = "none"
+
+[uncertainty.linearized]
+# Number of randomized probes per x/y/z column. Cost is three PCG solves/probe.
+probes = 12
+# Reproducible Rademacher-probe seed.
+seed = 24680
+# PCG controls for inverse-Hessian probing; looser than relocation is intentional.
+inner_tolerance = 1.0e-3
+inner_max_iterations = 150
+
+[uncertainty.bootstrap]
+# Number of nonlinear Stage-2 bootstrap relocations.
+replicates = 100
+# station_phase (recommended) | station. The latter can destabilize sparse networks.
+resampling_unit = "station_phase"
+# Reproducible block-resampling seed.
+seed = 12345
+# percentile | standard_deviation. Both are axis-wise summaries, not ellipses.
+summary_method = "percentile"
+# Central interval used only by percentile; 0.95 gives 2.5th--97.5th percentiles.
+confidence_level = 0.95
+# Half-width multiplier used only by standard_deviation; 2.0 gives mean +/- 2 sigma.
+standard_deviation_multiplier = 2.0
+# Write wide longitude, latitude, depth, and t0 sample tables.
+write_samples = true
+# Also write one filtered catalog per converged replicate; usually unnecessary.
+write_catalogs = false
 
 # Deliberately omitted from the minimal template. This scan is diagnostic and
 # disabled because applying it has not shown a consistent location benefit.

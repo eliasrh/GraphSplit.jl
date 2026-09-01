@@ -8,6 +8,14 @@ theta_dir = "theta"
 thetastd_dir = "thetastd"
 output_dir = "graphsplit_output"
 
+# Normally use the catalog hypocenters. To locate without single-event seed
+# locations, use "common_centroid" or "common_manual" and keep Stage 1 enabled.
+[initialization]
+mode = "catalog"
+# latitude = 64.0000
+# longitude = -21.0000
+# depth_km = 2.0
+
 [travel_time]
 velocity_model_file = "vm.txt"
 table_file = "lookuptable/graphsplit_tt.gstt"
@@ -46,6 +54,12 @@ minimum_observations_per_pair = 6
 [run]
 prelocation = true
 overwrite = true
+
+# Optional error/stability estimates. "linearized" is the inexpensive formal
+# estimate; "bootstrap" resamples complete station-phase theta groups; "both"
+# writes both products. Bootstrap runs can be much more expensive.
+[uncertainty]
+method = "none" # "none", "linearized", "bootstrap", or "both"
 
 # Every available option, including interactions, zero behavior, units, and
 # worked examples, is explained in docs/CONFIGURATION_REFERENCE.md.

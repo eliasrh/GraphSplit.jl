@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 — 2026-09-01
+
+- Added conditional nonlinear block bootstrap uncertainty with station-phase
+  groups as the default resampling unit and whole stations as an optional test.
+- Preserved every longitude, latitude, depth, and relative-origin-time sample
+  in wide serial-ID-keyed tables and recorded exact block multiplicities;
+  optional per-replicate catalogs remain pure.
+- Added `booterrxyz.txt` percentile or standard-deviation summaries and explicit
+  `NaN` handling for events that lose resampled support.
+- Added scalable randomized regularized inverse-Hessian covariance in the
+  separate `linerrxyz.txt` sidecar.
+- Kept all primary/prelocation catalogs unchanged and documented the limits of
+  both conditional uncertainty interpretations.
+- Added `catalog`, `common_centroid`, and `common_manual` initialization so
+  Stage 1 can perform a complete location without single-event seed
+  hypocenters; common modes cannot bypass Stage 1.
+- Extended lookup-table coverage checks to include both the input catalog and
+  an overridden common seed.
+- Clarified that hard pinning one or a few displaced events is not a reliable
+  catalog-translation method because robust downweighting and graph separation
+  can remove their leverage.
+
 ## 0.1.3 — 2026-08-13
 
 - Fixed native travel-time table header reads on Julia 1.12 by replacing the
