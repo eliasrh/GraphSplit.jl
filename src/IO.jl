@@ -53,6 +53,15 @@ function resolved_column(requested::Integer, ncol::Integer, name::String)
     return column
 end
 
+function catalog_origin_columns(cfg::AbstractDict, ncol::Integer)
+    requested = cfgget(cfg, "catalog", "origin_time_columns"; default=Int[])
+    isempty(requested) && return Int[]
+    length(requested) == 6 ||
+        error("catalog.origin_time_columns must contain year, month, day, hour, minute, and second columns")
+    return [resolved_column(Int(requested[index]), ncol,
+        ("year", "month", "day", "hour", "minute", "second")[index]) for index in 1:6]
+end
+
 "Read the DDSync/GraphSplit catalog; serial event IDs are taken from the configured final column."
 function read_catalog(path::AbstractString, cfg::AbstractDict=default_config())
     raw = read_numeric_matrix(path)
@@ -63,6 +72,9 @@ function read_catalog(path::AbstractString, cfg::AbstractDict=default_config())
     dep_col = resolved_column(Int(cfgget(cfg, "catalog", "depth_column"; default=9)), ncol, "depth")
     id_col = resolved_column(Int(cfgget(cfg, "catalog", "event_id_column"; default=-1)), ncol, "event ID")
     length(unique((lat_col, lon_col, dep_col, id_col))) == 4 || error("Catalog latitude, longitude, depth, and ID columns must be distinct")
+    origin_cols = catalog_origin_columns(cfg, ncol)
+    isempty(origin_cols) || length(unique(vcat(origin_cols, [lat_col, lon_col, dep_col, id_col]))) == 10 ||
+        error("Catalog origin-time, latitude, longitude, depth, and ID columns must be distinct")
 
     lat = copy(raw[:, lat_col])
     lon = copy(raw[:, lon_col])
@@ -189,11 +201,121 @@ function catalog_with_state(catalog::Catalog, state::State, cfg::AbstractDict)
     return lat, lon, depth
 end
 
-function write_catalog(path::AbstractString, catalog::Catalog, state::State, cfg::AbstractDict; mask::Union{Nothing,AbstractVector{Bool}}=nothing)
+function empty_catalog_shift(event_id::AbstractVector{<:Integer})
+    n = length(event_id)
+    return CatalogShift(Int64.(event_id), zeros(n), zeros(n), zeros(n), zeros(n))
+end
+
+"Read `dx_m dy_m dz_m dt0_s EventID`, accepting a superset of the working catalog IDs."
+function read_catalog_shift(path::AbstractString, event_id::AbstractVector{<:Integer})
+    raw = read_numeric_matrix(path)
+    size(raw, 2) == 5 || error("Restart shift file must contain five columns: dx_m dy_m dz_m dt0_s EventID")
+    all(isfinite, raw) || error("Restart shift file contains non-finite values: $path")
+    ids_float = raw[:, 5]
+    all(abs.(ids_float .- round.(ids_float)) .< 1.0e-8) ||
+        error("Restart shift EventIDs must be integer-valued")
+    ids = round.(Int64, ids_float)
+    all(>(0), ids) || error("Restart shift EventIDs must be positive")
+    length(unique(ids)) == length(ids) || error("Restart shift EventIDs are not unique")
+    rows = Dict(id => row for (row, id) in enumerate(ids))
+    missing = setdiff(Int64.(event_id), ids)
+    isempty(missing) || error("Restart shift file is missing EventIDs $(join(missing, ','))")
+    selected = [rows[Int64(id)] for id in event_id]
+    return CatalogShift(Int64.(event_id), copy(raw[selected, 1]), copy(raw[selected, 2]),
+        copy(raw[selected, 3]), copy(raw[selected, 4]))
+end
+
+function valid_catalog_origin(values::AbstractVector{<:Real}, columns::AbstractVector{<:Integer})
+    isempty(columns) && return false
+    year, month, day, hour, minute = (values[columns[index]] for index in 1:5)
+    second = values[columns[6]]
+    all(isfinite, (year, month, day, hour, minute, second)) || return false
+    all(value -> abs(value - round(value)) < 1.0e-8, (year, month, day, hour, minute)) || return false
+    0 <= round(Int, hour) <= 23 || return false
+    0 <= round(Int, minute) <= 59 || return false
+    0.0 <= second < 60.0 || return false
+    try
+        Date(round(Int, year), round(Int, month), round(Int, day))
+    catch
+        return false
+    end
+    return true
+end
+
+"Apply a signed origin-time increment with complete Gregorian calendar rollover."
+function apply_origin_increment!(values::AbstractVector{<:Real}, columns::AbstractVector{<:Integer},
+        increment_s::Real, decimals::Integer)
+    increment_s == 0.0 && return true
+    valid_catalog_origin(values, columns) || return false
+    year, month, day, hour, minute = (round(Int, values[columns[index]]) for index in 1:5)
+    second = Float64(values[columns[6]])
+    total = hour * 3600.0 + minute * 60.0 + second + Float64(increment_s)
+    day_offset = floor(Int, total / 86_400.0)
+    seconds_of_day = round(total - day_offset * 86_400.0; digits=Int(decimals))
+    if seconds_of_day >= 86_400.0
+        day_offset += 1
+        seconds_of_day -= 86_400.0
+    elseif seconds_of_day < 0.0
+        day_offset -= 1
+        seconds_of_day += 86_400.0
+    end
+    date = Date(year, month, day) + Day(day_offset)
+    new_hour = floor(Int, seconds_of_day / 3600.0)
+    seconds_of_day -= 3600.0 * new_hour
+    new_minute = floor(Int, seconds_of_day / 60.0)
+    new_second = seconds_of_day - 60.0 * new_minute
+    values[columns[1]] = Dates.year(date)
+    values[columns[2]] = Dates.month(date)
+    values[columns[3]] = Dates.day(date)
+    values[columns[4]] = new_hour
+    values[columns[5]] = new_minute
+    values[columns[6]] = new_second
+    return true
+end
+
+function cumulative_catalog_shift(previous::CatalogShift, catalog_state::State, state::State,
+        activity::AbstractVector{Bool})
+    length(previous) == length(catalog_state) == length(state) == length(activity) ||
+        error("Catalog shift length mismatch")
+    previous.event_id == catalog_state.event_id == state.event_id || error("Catalog shift EventID mismatch")
+    dx, dy, dz, dt0 = copy(previous.dx_m), copy(previous.dy_m), copy(previous.dz_m), copy(previous.dt0_s)
+    for event in findall(activity)
+        dx[event] += state.x[event] - catalog_state.x[event]
+        dy[event] += state.y[event] - catalog_state.y[event]
+        dz[event] += state.z[event] - catalog_state.z[event]
+        dt0[event] = state.t0[event]
+    end
+    return CatalogShift(copy(state.event_id), dx, dy, dz, dt0)
+end
+
+function write_catalog_shift(path::AbstractString, shift::CatalogShift)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, "# dx_m dy_m dz_m dt0_s EventID")
+        for row in eachindex(shift.event_id)
+            @printf(io, "%.6f %.6f %.6f %.12f %d\n", shift.dx_m[row], shift.dy_m[row],
+                shift.dz_m[row], shift.dt0_s[row], shift.event_id[row])
+        end
+    end
+    return path
+end
+
+function write_catalog(path::AbstractString, catalog::Catalog, state::State, cfg::AbstractDict;
+        mask::Union{Nothing,AbstractVector{Bool}}=nothing,
+        origin_time_basis::AbstractVector{<:Real}=zeros(length(catalog)),
+        origin_time_activity::AbstractVector{Bool}=trues(length(catalog)))
     mkpath(dirname(path))
     lat, lon, depth = catalog_with_state(catalog, state, cfg)
     chosen = mask === nothing ? trues(length(catalog)) : mask
     length(chosen) == length(catalog) || error("Catalog output mask length mismatch")
+    length(origin_time_basis) == length(catalog) || error("Catalog origin-time basis length mismatch")
+    length(origin_time_activity) == length(catalog) || error("Catalog origin-time activity length mismatch")
+    origin_columns = catalog_origin_columns(cfg, size(catalog.raw, 2))
+    origin_decimals = Int(cfgget(cfg, "catalog", "origin_time_decimals"; default=6))
+    date_columns = isempty(origin_columns) ? Int[] : origin_columns[1:5]
+    second_column = isempty(origin_columns) ? 0 : origin_columns[6]
+    second_format = Printf.Format("%." * string(origin_decimals) * "f")
+    skipped_origin_corrections = 0
     open(path, "w") do io
         for row in axes(catalog.raw, 1)
             chosen[row] || continue
@@ -201,13 +323,18 @@ function write_catalog(path::AbstractString, catalog::Catalog, state::State, cfg
             values[catalog.lat_col] = lat[row]
             values[catalog.lon_col] = lon[row]
             values[catalog.depth_col] = depth[row]
+            increment = origin_time_activity[row] ? state.t0[row] - Float64(origin_time_basis[row]) : 0.0
+            isempty(origin_columns) || apply_origin_increment!(values, origin_columns, increment, origin_decimals) ||
+                (skipped_origin_corrections += 1)
             for col in eachindex(values)
                 if col == catalog.id_col
                     @printf(io, "%d", round(Int64, values[col]))
+                elseif col in date_columns
+                    @printf(io, "%d", round(Int64, values[col]))
+                elseif col == second_column
+                    print(io, Printf.format(second_format, values[col]))
                 elseif col <= 5 && abs(values[col] - round(values[col])) < 1.0e-8
                     @printf(io, "%d", round(Int64, values[col]))
-                elseif col == 6
-                    @printf(io, "%.3f", values[col])
                 elseif col == catalog.lat_col
                     @printf(io, "%.6f", values[col])
                 elseif col == catalog.lon_col
@@ -224,5 +351,6 @@ function write_catalog(path::AbstractString, catalog::Catalog, state::State, cfg
             println(io)
         end
     end
+    skipped_origin_corrections > 0 && @warn "Origin-time corrections could not be applied to rows with invalid or unavailable calendar fields; the shift sidecar retains their dt0 values" path=path rows=skipped_origin_corrections
     return path
 end

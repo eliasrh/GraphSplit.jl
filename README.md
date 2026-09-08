@@ -175,14 +175,25 @@ The output directory contains:
 
 - `catalog_preloc.txt` and `catalog_preloc_filt.txt`;
 - `catalog_dd.txt` and `catalog_dd_filt.txt`;
+- `catalog_preloc_dxdydzt0.txt` and `catalog_dd_dxdydzt0.txt`, with cumulative
+  east/north/vertical/time shifts for every serial ID;
 - `catalog_dd_graphmeta.csv`, with graph and observation support per event;
 - `solver_history.csv`, with nonlinear and inner-solver convergence;
 - `run_summary.toml`, with run settings and core counts;
 - `depth_constraint_status.csv` when a physical or fixed depth is enabled.
 
-The catalog's date/time and auxiliary columns are preserved. Internal relative
-origin-time corrections are nuisance parameters and are not written into the
-catalog date/time columns.
+For the default HypoDD-style catalog, the relocated files apply the solved
+origin-time correction to year/month/day/hour/minute/second, including calendar
+rollover. Positive `dt0_s` moves the origin time later. Auxiliary columns are
+preserved. If a catalog has no usable calendar time, set
+`catalog.origin_time_columns = []`; its time-like columns remain unchanged while
+the shift sidecars still report `dt0_s`.
+
+The shift files contain `dx_m dy_m dz_m dt0_s EventID`. Events that have never
+participated in a retained relocation have four zeros. The values are cumulative
+from the first-pass input, which makes them useful for displacement analysis and
+also preserves the relative-time state required by an optional DD-only second
+pass. See [file formats](docs/FILE_FORMATS.md#relocation-shift-sidecars).
 
 With `uncertainty.method = "linearized"`, `"bootstrap"`, or `"both"`, GraphSplit
 writes separate sidecars without changing any catalog format. Bootstrap output
@@ -197,6 +208,10 @@ for interpretation.
   displaced pins can become graph-isolated.
 - Use `common_centroid` or `common_manual` when individual seed locations are
   unavailable or intentionally ignored.
+- A DD-only second pass is an advanced option for a poor, sparsely connected
+  seed: pair a previous `catalog_dd.txt` with its
+  `catalog_dd_dxdydzt0.txt`, then rebuild a tighter graph after the broad first
+  graph has improved event proximity.
 - Use fixed depth when depth is known externally; do not imitate it with very
   large depth damping.
 - A cluster at the physical depth bound indicates unresolved depth. Inspect

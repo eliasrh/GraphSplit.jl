@@ -15,7 +15,6 @@ making the public interface smaller and safer.
 - Mutual local event graphs, degree/radius limits, optional augmentation, and
   zero-mean or exact pinned gauges.
 - Primary `catalog_preloc*` and `catalog_dd*` output names.
-- Catalog time fields are preserved rather than modified by relative `t0`.
 - The coherent theta-bias scan is available but experimental and disabled.
 - Regularized randomized inverse-Hessian uncertainty is retained as a separate
   `linerrxyz.txt` sidecar rather than appended to the catalog.
@@ -52,6 +51,13 @@ making the public interface smaller and safer.
   independently of the gauge; x, y, and relative origin time remain free.
 - Constraint status and bootstrap bound-active fractions are separate
   serial-ID-keyed sidecars, preserving the primary catalog format.
+- Relocated catalogs apply relative origin-time corrections to configured
+  calendar fields with full rollover, matching the practical HypoDD convention.
+  Cumulative local x/y/z/t0 shifts are also written in serial-ID-keyed sidecars;
+  the MATLAB working version kept `t0` only in memory.
+- A DD-only pass must pair a previous relocated catalog with its cumulative
+  shift sidecar. This reconstructs the time state used in theta predictions and
+  prevents an apparently relocated restart from silently resetting `t0`.
 
 ## Intentionally excluded experimental diagnostics
 

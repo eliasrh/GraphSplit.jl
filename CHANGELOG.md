@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 — 2026-09-07
+
+- Applied solved relative origin-time corrections to configured catalog calendar
+  fields, including full Gregorian rollover and a no-calendar mode for point
+  inputs.
+- Added cumulative `catalog_preloc_dxdydzt0.txt` and
+  `catalog_dd_dxdydzt0.txt` files in metres/metres/metres/seconds for every
+  persistent event ID, with zeros for events never relocated.
+- Made a DD-only iterated graph restore its cumulative relative-time state from
+  the matching prior shift file, avoiding a misleading high first residual and
+  double application of corrected calendar time.
+- Added regression coverage for positive and negative date rollover, inactive
+  events, invalid calendar rows, ID-reordered shift input, cumulative two-pass
+  shifts, and exact restart prediction equivalence.
+- Integrated catalog timing, shift-file interpretation, and the sparse-network
+  iterated-graph use case into the manual, configuration reference, file-format
+  guide, examples, parity notes, and validation guide.
+
 ## 0.3.0 — 2026-09-01
 
 - Added an exact fixed-depth constraint for all events or explicit serial-ID

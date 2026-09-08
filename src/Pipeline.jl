@@ -1,7 +1,8 @@
 function prepare_output_directory(cfg::AbstractDict)
     output = String(cfgget(cfg, "io", "output_dir"))
     mkpath(output)
-    primary = ("catalog_dd.txt", "catalog_dd_filt.txt", "catalog_preloc.txt", "catalog_preloc_filt.txt")
+    primary = ("catalog_dd.txt", "catalog_dd_filt.txt", "catalog_preloc.txt", "catalog_preloc_filt.txt",
+        "catalog_dd_dxdydzt0.txt", "catalog_preloc_dxdydzt0.txt")
     if !Bool(cfgget(cfg, "run", "overwrite"; default=true)) && any(isfile(joinpath(output, file)) for file in primary)
         error("Output directory already contains GraphSplit results and run.overwrite=false: $output")
     end
@@ -64,6 +65,18 @@ function write_summary(path::AbstractString, cfg::AbstractDict, catalog::Catalog
         "inputs" => Dict("events" => length(catalog), "stations" => length(stations), "theta_groups" => length(groups)),
         "travel_time" => Dict("geometry" => geometry, "type" => travel_time isa TravelTimeTable ? "lookup" : "constant"),
         "initialization" => Dict("mode" => String(cfgget(cfg, "initialization", "mode"; default="catalog"))),
+        "catalog_output" => Dict(
+            "origin_time_columns" => Int.(cfgget(cfg, "catalog", "origin_time_columns"; default=Int[])),
+            "origin_time_decimals" => Int(cfgget(cfg, "catalog", "origin_time_decimals"; default=6)),
+            "shift_spatial_units" => "m",
+            "shift_time_units" => "s",
+            "shift_semantics" => "cumulative_from_first_pass_input",
+            "shift_horizontal_axes" => "local_east_north",
+            "shift_vertical_convention" => String(cfgget(cfg, "coordinates", "event_vertical"; default="positive_depth")),
+            "shift_reference_latitude" => catalog.ref_lat,
+            "shift_reference_longitude" => catalog.ref_lon,
+            "restart_shift_file" => String(cfgget(cfg, "io", "restart_shift_file"; default="")),
+        ),
         "prelocation" => Dict("observations" => length(pre), "iterations" => pre_stats.iterations,
             "final_robust_rms_s" => isempty(pre_stats.rms_s) ? NaN : pre_stats.rms_s[end]),
         "relocation" => Dict("graph_edges" => length(graph), "graph_components" => graph.ncomp,
@@ -104,14 +117,25 @@ function run(cfg::Dict{String,Any})
     output = prepare_output_directory(cfg)
     catalog = read_catalog(String(cfgget(cfg, "io", "catalog_file")), cfg)
     stations = read_stations(String(cfgget(cfg, "io", "stations_file")))
-    initial = attach_coordinates!(stations, catalog, cfg)
+    catalog_state = attach_coordinates!(stations, catalog, cfg)
+    initial = copy_state(catalog_state)
+    do_prelocation = Bool(cfgget(cfg, "run", "prelocation"; default=true))
+    build_only = Bool(cfgget(cfg, "run", "build_travel_times_only"; default=false))
+    previous_shift = empty_catalog_shift(catalog.event_id)
+    if !do_prelocation && !build_only
+        restart_path = String(cfgget(cfg, "io", "restart_shift_file"; default=""))
+        isempty(restart_path) && error("run.prelocation=false requires io.restart_shift_file from the catalog used as the Stage-2 seed")
+        previous_shift = read_catalog_shift(restart_path, catalog.event_id)
+        initial.t0 .= previous_shift.dt0_s
+        @printf("Loaded cumulative shifts for %d events from %s\n", length(previous_shift), restart_path)
+    end
     apply_initialization!(initial, cfg)
     apply_pin_reference!(initial, stations, cfg)
     apply_fixed_depth_constraints!(initial, cfg)
     reflected_restart = Bool(get(depth_bound_options(cfg), "reflected_prelocation_restart", false))
     validate_depth_constraint_state!(initial, cfg; allow_free_outside=reflected_restart)
     travel_time = prepare_travel_time(cfg, stations, catalog, initial)
-    if Bool(cfgget(cfg, "run", "build_travel_times_only"; default=false))
+    if build_only
         result = (geometry=travel_time.geometry,
             table_file=travel_time isa TravelTimeTable ? travel_time.file : "",
             type=travel_time isa TravelTimeTable ? :lookup : :constant)
@@ -122,7 +146,6 @@ function run(cfg::Dict{String,Any})
     bias_model = String(cfgget(cfg, "experimental", "bias", "apply_model_file"; default=""))
     isempty(bias_model) || apply_bias_model!(groups, bias_model, initial, catalog)
 
-    do_prelocation = Bool(cfgget(cfg, "run", "prelocation"; default=true))
     reflected_depths = falses(length(catalog))
     prelocation_pilot_stats = nothing
     if do_prelocation
@@ -172,10 +195,17 @@ function run(cfg::Dict{String,Any})
         pre_stats = SolveStats(0, Float64[], Float64[], Float64[], Int[], true,
             zeros(Int, length(catalog)), falses(length(catalog)))
     end
-    write_catalog(joinpath(output, "catalog_preloc.txt"), catalog, pre_state, cfg)
+    pre_activity = do_prelocation && !isempty(pre_observations) ?
+        event_activity(pre_observations, length(catalog)) : falses(length(catalog))
+    pre_shift = cumulative_catalog_shift(previous_shift, catalog_state, pre_state, pre_activity)
+    write_catalog(joinpath(output, "catalog_preloc.txt"), catalog, pre_state, cfg;
+        origin_time_basis=previous_shift.dt0_s, origin_time_activity=pre_activity)
+    write_catalog_shift(joinpath(output, "catalog_preloc_dxdydzt0.txt"), pre_shift)
     pre_mask = do_prelocation && !isempty(pre_observations) ? event_activity(pre_observations, length(catalog)) : trues(length(catalog))
     Bool(cfgget(cfg, "output", "write_filtered_catalogs"; default=true)) &&
-        write_catalog(joinpath(output, "catalog_preloc_filt.txt"), catalog, pre_state, cfg; mask=pre_mask)
+        write_catalog(joinpath(output, "catalog_preloc_filt.txt"), catalog, pre_state, cfg;
+            mask=pre_mask, origin_time_basis=previous_shift.dt0_s,
+            origin_time_activity=pre_activity)
 
     println("\n=== Stage 2: sparse graph and DD relocation ===")
     graph = build_event_graph(pre_state, cfg)
@@ -183,10 +213,16 @@ function run(cfg::Dict{String,Any})
     isempty(dd_observations) && error("No Stage-2 observations survived. Check station names, thetaStd degree filtering, pair support, and graph radius")
     dd_state, dd_stats = solve_relocation(pre_state, stations, dd_observations, travel_time,
         cfg["relocation"], cfg)
-    write_catalog(joinpath(output, "catalog_dd.txt"), catalog, dd_state, cfg)
     dd_mask = event_activity(dd_observations, length(catalog))
+    final_activity = pre_activity .| dd_mask
+    dd_shift = cumulative_catalog_shift(previous_shift, catalog_state, dd_state, final_activity)
+    write_catalog(joinpath(output, "catalog_dd.txt"), catalog, dd_state, cfg;
+        origin_time_basis=previous_shift.dt0_s, origin_time_activity=final_activity)
+    write_catalog_shift(joinpath(output, "catalog_dd_dxdydzt0.txt"), dd_shift)
     Bool(cfgget(cfg, "output", "write_filtered_catalogs"; default=true)) &&
-        write_catalog(joinpath(output, "catalog_dd_filt.txt"), catalog, dd_state, cfg; mask=dd_mask)
+        write_catalog(joinpath(output, "catalog_dd_filt.txt"), catalog, dd_state, cfg;
+            mask=dd_mask, origin_time_basis=previous_shift.dt0_s,
+            origin_time_activity=final_activity)
 
     if Bool(cfgget(cfg, "output", "write_graph_metadata"; default=true))
         write_graph_metadata(joinpath(output, "catalog_dd_graphmeta.csv"), catalog, graph, pre_observations, dd_observations)
@@ -212,7 +248,8 @@ function run(cfg::Dict{String,Any})
     if uncertainty_method in ("bootstrap", "both")
         println("\n=== Uncertainty: station-phase block bootstrap ===")
         bootstrap_uncertainty = run_bootstrap_uncertainty(catalog, groups, dd_state, stations,
-            dd_observations, travel_time, dd_mask, output, cfg)
+            dd_observations, travel_time, dd_mask, output, cfg;
+            origin_time_basis=previous_shift.dt0_s)
     end
     bias_report = NamedTuple[]
     if Bool(cfgget(cfg, "experimental", "bias", "enabled"; default=false))
@@ -231,6 +268,7 @@ function run(cfg::Dict{String,Any})
         graph=graph, pre_observations=pre_observations, dd_observations=dd_observations,
         pre_stats=pre_stats, dd_stats=dd_stats, linearized_uncertainty=linearized_uncertainty,
         bootstrap_uncertainty=bootstrap_uncertainty, bias_report=bias_report,
+        pre_shift=pre_shift, dd_shift=dd_shift,
         reflected_depths=reflected_depths, prelocation_pilot_stats=prelocation_pilot_stats,
         output_dir=output)
 end

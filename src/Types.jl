@@ -41,9 +41,19 @@ mutable struct State
     ref_radius_m::Float64
 end
 
+"Cumulative catalog displacement in the GraphSplit local frame, keyed by event ID."
+struct CatalogShift
+    event_id::Vector{Int64}
+    dx_m::Vector{Float64}
+    dy_m::Vector{Float64}
+    dz_m::Vector{Float64}
+    dt0_s::Vector{Float64}
+end
+
 Base.length(c::Catalog) = length(c.event_id)
 Base.length(s::Stations) = length(s.id)
 Base.length(s::State) = length(s.event_id)
+Base.length(s::CatalogShift) = length(s.event_id)
 
 "One finite DDSync theta entry, keyed by serial event ID."
 struct ThetaEntry

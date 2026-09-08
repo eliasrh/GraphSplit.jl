@@ -28,6 +28,7 @@ function default_config()
     return Dict{String,Any}(
         "io" => Dict{String,Any}(
             "catalog_file" => "catalog.txt",
+            "restart_shift_file" => "",
             "stations_file" => "stations.txt",
             "theta_dir" => "theta",
             "thetastd_dir" => "thetastd",
@@ -43,6 +44,8 @@ function default_config()
             "longitude_column" => 8,
             "depth_column" => 9,
             "event_id_column" => -1,
+            "origin_time_columns" => [1, 2, 3, 4, 5, 6],
+            "origin_time_decimals" => 6,
         ),
         "initialization" => Dict{String,Any}(
             "mode" => "catalog",
@@ -226,7 +229,7 @@ end
 
 function normalize_config_paths!(cfg::Dict{String,Any}, base::String)
     for (section, keys) in (
-        ("io", ("catalog_file", "stations_file", "theta_dir", "thetastd_dir", "output_dir")),
+        ("io", ("catalog_file", "restart_shift_file", "stations_file", "theta_dir", "thetastd_dir", "output_dir")),
         ("travel_time", ("table_file", "velocity_model_file")),
         ("gauge", ("pin_reference_catalog",)),
         ("experimental", ()),
@@ -280,6 +283,23 @@ function load_config(path::AbstractString)
 end
 
 function validate_config(cfg::Dict{String,Any})
+    origin_columns = cfgget(cfg, "catalog", "origin_time_columns"; default=Int[])
+    origin_columns isa AbstractVector || error("catalog.origin_time_columns must be an array")
+    (isempty(origin_columns) || length(origin_columns) == 6) ||
+        error("catalog.origin_time_columns must be empty or contain six columns: year, month, day, hour, minute, second")
+    all(value -> value isa Integer && value != 0, origin_columns) ||
+        error("catalog.origin_time_columns entries must be nonzero integers")
+    length(unique(Int.(origin_columns))) == length(origin_columns) ||
+        error("catalog.origin_time_columns cannot contain duplicates")
+    origin_decimals = Int(cfgget(cfg, "catalog", "origin_time_decimals"; default=6))
+    0 <= origin_decimals <= 12 || error("catalog.origin_time_decimals must be between 0 and 12")
+    do_prelocation = Bool(cfgget(cfg, "run", "prelocation"; default=true))
+    build_only = Bool(cfgget(cfg, "run", "build_travel_times_only"; default=false))
+    restart_shift = String(cfgget(cfg, "io", "restart_shift_file"; default=""))
+    !do_prelocation && !build_only && isempty(restart_shift) &&
+        error("run.prelocation=false requires io.restart_shift_file from the catalog used as the Stage-2 seed")
+    do_prelocation && !isempty(restart_shift) &&
+        error("io.restart_shift_file is only used when run.prelocation=false")
     lowercase(String(cfgget(cfg, "travel_time", "type"))) in ("lookup", "constant", "constant_velocity", "constvel") ||
         error("travel_time.type must be lookup or constant")
     if lowercase(String(cfgget(cfg, "travel_time", "type"))) == "lookup"

@@ -99,6 +99,13 @@ end
         @test GraphSplit.validate_config(cfg) === cfg
         cfg["run"]["prelocation"] = false
         @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["io"]["restart_shift_file"] = "pass1/catalog_dd_dxdydzt0.txt"
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["initialization"]["mode"] = "catalog"
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["run"]["prelocation"] = true
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["io"]["restart_shift_file"] = ""
         cfg["run"]["prelocation"] = true
         cfg["initialization"]["mode"] = "common_manual"
         cfg["initialization"]["latitude"] = 91.0
@@ -130,6 +137,19 @@ end
         @test_throws ErrorException GraphSplit.validate_config(cfg)
         cfg["constraints"]["fixed_depth"]["event_ids"] = Int[]
         cfg["constraints"]["fixed_depth"]["depth_km"] = -0.8
+        @test GraphSplit.validate_config(cfg) === cfg
+
+        cfg = GraphSplit.default_config()
+        cfg["catalog"]["origin_time_columns"] = [1, 2, 3]
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+        cfg["catalog"]["origin_time_columns"] = Int[]
+        @test GraphSplit.validate_config(cfg) === cfg
+        cfg["catalog"]["origin_time_decimals"] = 13
+        @test_throws ErrorException GraphSplit.validate_config(cfg)
+
+        cfg = GraphSplit.default_config()
+        cfg["run"]["prelocation"] = false
+        cfg["run"]["build_travel_times_only"] = true
         @test GraphSplit.validate_config(cfg) === cfg
     end
 
@@ -190,6 +210,164 @@ end
         manual_range = GraphSplit.required_range(stations, catalog, manual_state, :cartesian, 6_371_000.0)
         @test manual_range > original_range
         @test manual_range >= 200_000.0
+    end
+
+    @testset "catalog origin times and cumulative shifts" begin
+        ids = Int64[10, 20, 30]
+        raw = [
+            2024.0 12.0 31.0 23.0 59.0 59.9 35.0 -117.0 1.0 10.0
+            2025.0 1.0 1.0 0.0 0.0 0.1 35.0 -117.0 2.0 20.0
+            0.0 0.0 0.0 0.0 0.0 0.0 35.0 -117.0 3.0 30.0
+        ]
+        catalog = GraphSplit.Catalog("memory", raw, ids, raw[:, 7], raw[:, 8], raw[:, 9],
+            7, 8, 9, 10, 35.0, -117.0, 6_371_000.0)
+        catalog_state = GraphSplit.State(ids, zeros(3), zeros(3), 1000.0 .* raw[:, 9],
+            zeros(3), 35.0, -117.0, 6_371_000.0)
+        state = GraphSplit.copy_state(catalog_state)
+        state.x .= [12.0, 24.0, 36.0]
+        state.y .= [-2.0, -4.0, -6.0]
+        state.z .+= [3.0, 6.0, 9.0]
+        state.t0 .= [0.2, -0.2, 0.5]
+        activity = BitVector([true, true, false])
+        cfg = GraphSplit.default_config()
+
+        mktempdir() do directory
+            catalog_path = joinpath(directory, "catalog_dd.txt")
+            GraphSplit.write_catalog(catalog_path, catalog, state, cfg;
+                origin_time_activity=activity)
+            written = GraphSplit.read_numeric_matrix(catalog_path)
+            @test written[1, 1:6] == [2025.0, 1.0, 1.0, 0.0, 0.0, 0.1]
+            @test written[2, 1:6] == [2024.0, 12.0, 31.0, 23.0, 59.0, 59.9]
+            @test written[3, 1:6] == raw[3, 1:6]
+
+            restarted = GraphSplit.copy_state(state)
+            restarted.t0 .= [0.25, -0.15, 0.5]
+            restart_catalog_path = joinpath(directory, "catalog_dd_restart.txt")
+            GraphSplit.write_catalog(restart_catalog_path,
+                GraphSplit.Catalog("restart", written, ids, written[:, 7], written[:, 8],
+                    written[:, 9], 7, 8, 9, 10, 35.0, -117.0, 6_371_000.0),
+                restarted, cfg; origin_time_basis=state.t0,
+                origin_time_activity=BitVector([true, true, false]))
+            restarted_written = GraphSplit.read_numeric_matrix(restart_catalog_path)
+            @test restarted_written[1, 6] == 0.15
+            @test restarted_written[2, 6] == 59.95
+            @test restarted_written[3, 1:6] == raw[3, 1:6]
+
+            cfg_without_calendar = deepcopy(cfg)
+            cfg_without_calendar["catalog"]["origin_time_columns"] = Int[]
+            no_calendar_path = joinpath(directory, "catalog_no_calendar.txt")
+            GraphSplit.write_catalog(no_calendar_path, catalog, state, cfg_without_calendar;
+                origin_time_activity=activity)
+            @test GraphSplit.read_numeric_matrix(no_calendar_path)[:, 1:6] == raw[:, 1:6]
+
+            invalid_activity = BitVector([false, false, true])
+            @test_logs (:warn, r"Origin-time corrections could not be applied")
+                GraphSplit.write_catalog(joinpath(directory, "catalog_invalid_calendar.txt"),
+                    catalog, state, cfg; origin_time_activity=invalid_activity)
+
+            first_shift = GraphSplit.cumulative_catalog_shift(
+                GraphSplit.empty_catalog_shift(ids), catalog_state, state, activity)
+            @test first_shift.dx_m == [12.0, 24.0, 0.0]
+            @test first_shift.dy_m == [-2.0, -4.0, 0.0]
+            @test first_shift.dz_m == [3.0, 6.0, 0.0]
+            @test first_shift.dt0_s == [0.2, -0.2, 0.0]
+
+            shift_path = joinpath(directory, "catalog_dd_dxdydzt0.txt")
+            GraphSplit.write_catalog_shift(shift_path, first_shift)
+            reordered = GraphSplit.read_catalog_shift(shift_path, Int64[30, 10, 20])
+            @test reordered.event_id == Int64[30, 10, 20]
+            @test reordered.dt0_s == [0.0, 0.2, -0.2]
+
+            second_state = GraphSplit.copy_state(catalog_state)
+            second_state.x .= state.x .+ [1.0, 2.0, 3.0]
+            second_state.y .= state.y
+            second_state.z .= state.z
+            second_state.t0 .= [0.25, -0.15, 0.0]
+            second_shift = GraphSplit.cumulative_catalog_shift(first_shift, state,
+                second_state, BitVector([true, false, false]))
+            @test second_shift.dx_m == [13.0, 24.0, 0.0]
+            @test second_shift.dt0_s == [0.25, -0.2, 0.0]
+
+            stations = GraphSplit.Stations(["STA"], [35.0], [-117.0], [0.0],
+                [0.0], [0.0], [0.0], 35.0, -117.0, 6_371_000.0)
+            obs = GraphSplit.Observations(Int32[1], Int32[2], zeros(1),
+                ones(1), Int32[1], UInt8[1], Int32[1])
+            travel_time = GraphSplit.ConstantTravelTime(:cartesian, 6000.0, 3500.0,
+                6_371_000.0, 35.0, -117.0, 6_371_000.0)
+            prediction = GraphSplit.predict_and_gradients(state, stations, obs, travel_time)[1]
+            reconstructed = GraphSplit.copy_state(state)
+            reconstructed.t0 .= GraphSplit.read_catalog_shift(shift_path, ids).dt0_s
+            @test GraphSplit.predict_and_gradients(reconstructed, stations, obs, travel_time)[1] == prediction
+        end
+    end
+
+    @testset "DD-only pipeline restart preserves origin-time state" begin
+        mktempdir() do directory
+            theta_directory = joinpath(directory, "theta")
+            mkpath(theta_directory)
+            catalog_path = joinpath(directory, "catalog.txt")
+            stations_path = joinpath(directory, "stations.txt")
+            theta_path = joinpath(theta_directory, "theta_STA_P.txt")
+            open(catalog_path, "w") do io
+                println(io, "2025 1 2 3 4 10.000000 35.000000 -117.000000 4.0000 1.0 1")
+                println(io, "2025 1 2 3 4 10.000000 35.000000 -117.000000 4.0000 1.0 2")
+                println(io, "2025 1 2 3 4 10.000000 35.000000 -117.000000 4.0000 1.0 3")
+            end
+            open(stations_path, "w") do io
+                println(io, "STA 35.000000 -117.000000 0.0")
+            end
+            open(theta_path, "w") do io
+                println(io, "1 0.010000 1")
+                println(io, "2 -0.010000 1")
+                println(io, "3 0.000000 1")
+            end
+
+            cfg = GraphSplit.default_config()
+            cfg["io"]["catalog_file"] = catalog_path
+            cfg["io"]["stations_file"] = stations_path
+            cfg["io"]["theta_dir"] = theta_directory
+            cfg["io"]["thetastd_dir"] = joinpath(directory, "thetastd")
+            cfg["io"]["output_dir"] = joinpath(directory, "pass1")
+            cfg["coordinates"]["reference"] = "manual"
+            cfg["coordinates"]["reference_latitude"] = 35.0
+            cfg["coordinates"]["reference_longitude"] = -117.0
+            cfg["travel_time"]["type"] = "constant"
+            cfg["travel_time"]["geometry"] = "cartesian"
+            cfg["graph"]["neighbors"] = 2
+            cfg["graph"]["maximum_degree"] = 2
+            cfg["graph"]["mutual"] = false
+            cfg["observations"]["minimum_theta_degree"] = 0
+            cfg["observations"]["minimum_observations_per_pair"] = 1
+            cfg["prelocation"]["max_outer_iterations"] = 6
+            cfg["prelocation"]["min_outer_iterations"] = 1
+            cfg["prelocation"]["verbose"] = false
+            cfg["relocation"]["max_outer_iterations"] = 6
+            cfg["relocation"]["min_outer_iterations"] = 1
+            cfg["relocation"]["verbose"] = false
+            @test GraphSplit.validate_config(cfg) === cfg
+
+            pass1 = GraphSplit.run(cfg)
+            pass1_catalog = joinpath(cfg["io"]["output_dir"], "catalog_dd.txt")
+            pass1_shift = joinpath(cfg["io"]["output_dir"], "catalog_dd_dxdydzt0.txt")
+            @test isfile(pass1_catalog)
+            @test isfile(pass1_shift)
+            @test maximum(abs.(pass1.dd_shift.dt0_s)) > 0.005
+
+            cfg2 = deepcopy(cfg)
+            cfg2["io"]["catalog_file"] = pass1_catalog
+            cfg2["io"]["restart_shift_file"] = pass1_shift
+            cfg2["io"]["output_dir"] = joinpath(directory, "pass2")
+            cfg2["run"]["prelocation"] = false
+            @test GraphSplit.validate_config(cfg2) === cfg2
+            pass2 = GraphSplit.run(cfg2)
+
+            @test pass2.pre_state.t0 ≈ pass1.dd_shift.dt0_s atol=1.0e-12
+            output2 = GraphSplit.read_numeric_matrix(joinpath(cfg2["io"]["output_dir"],
+                "catalog_dd.txt"))
+            @test output2[:, 6] ≈ 10.0 .+ pass2.dd_shift.dt0_s atol=1.1e-6
+            @test GraphSplit.read_numeric_matrix(joinpath(cfg2["io"]["output_dir"],
+                "catalog_dd_filt.txt"))[:, 6] ≈ output2[:, 6] atol=1.0e-12
+        end
     end
 
     @testset "depth constraints" begin

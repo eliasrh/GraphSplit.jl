@@ -58,6 +58,7 @@ Most users should tune settings in this order.
 | Only a small fraction of events relocate | `catalog_dd_graphmeta.csv`, DDSync degree, pair support | Relax `minimum_theta_degree` or `minimum_observations_per_pair` cautiously; enlarge the graph if pairs are missing |
 | Many graph components or zero-degree events | Graph degree/radius, seed locations | Increase `graph.neighbors`, relax `graph.maximum_distance_km`, or set `mutual = false`; use connectivity repair only after checking the cause |
 | No reliable single-event seed locations | `initialization.mode`, Stage-1 coverage | Use `common_centroid` or a reasonable `common_manual` seed and keep `run.prelocation = true` |
+| A DD-only second pass starts with a much larger residual than the preceding solution | `io.restart_shift_file` and the catalog/shift pairing | Use the `catalog_dd.txt` and `catalog_dd_dxdydzt0.txt` produced by the same pass; the shift file restores the cumulative relative origin times |
 | PCG repeatedly reaches its iteration limit | Graph support, damping, preconditioner | Increase damping, retain `block_jacobi`, or increase `inner_max_iterations`; do not begin by making `inner_tolerance` tighter |
 | Locations pile up at a table boundary | Lookup depth/range and clamping | Rebuild a larger table; clamping prevents a crash but does not make boundary locations reliable |
 | Sparse-station events mirror above the surface | `constraints.depth_bound`, Stage-1 depth geometry | Add an explicit physical minimum depth; enable the reflected Stage-1 restart when the deeper mirror branch is expected |
@@ -68,11 +69,13 @@ The numerical values below are defaults, not universal recommendations.
 
 ## 3. Files and directories: `[io]`
 
-All five paths may be relative to `graphsplit.toml` or absolute.
+The five ordinary paths and the optional restart path may be relative to
+`graphsplit.toml` or absolute.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `io.catalog_file` | `"catalog.txt"` | Earthquake catalog. It supplies the persistent serial event ID and preserved columns; by default it also supplies individual seed latitude, longitude, and depth. `[initialization]` can override those individual seeds in memory. |
+| `io.restart_shift_file` | `""` | Cumulative `catalog_dd_dxdydzt0.txt` paired with `io.catalog_file` for an advanced DD-only second pass. It is required when `run.prelocation = false`, ignored only for a table-only invocation, and must be empty for an ordinary run with Stage 1. |
 | `io.stations_file` | `"stations.txt"` | Station coordinates and elevations. Station codes must exactly match the codes in theta filenames. |
 | `io.theta_dir` | `"theta"` | Directory containing DDSync `theta_<STA>_<P\|S>.txt` files. |
 | `io.thetastd_dir` | `"thetastd"` | Directory containing matching DDSync `std_theta_<STA>_<P\|S>.txt` uncertainty/degree files. Missing individual thetaStd files are allowed, but their observations then use the sigma floor and cannot be degree-filtered. |
@@ -84,7 +87,7 @@ See [FILE_FORMATS.md](FILE_FORMATS.md) for column-by-column examples.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `run.prelocation` | `true` | Run Stage 1 before the sparse pair relocation. Set to `false` for a second pass whose input is an earlier `catalog_dd.txt`. Stage 2 always runs unless this is a table-only invocation. |
+| `run.prelocation` | `true` | Run Stage 1 before the sparse pair relocation. Set to `false` only for a DD-only pass whose input is an earlier `catalog_dd.txt` and whose `io.restart_shift_file` is the matching shift sidecar. Stage 2 always runs unless this is a table-only invocation. |
 | `run.overwrite` | `true` | Allow primary catalog files in `output_dir` to be replaced. `false` stops before overwriting an existing primary result. It does not delete unrelated old files from the directory. |
 | `run.build_travel_times_only` | `false` | Prepare/validate the travel-time model and return without loading theta data or relocating. The command-line `--build-tt-only` option provides the same practical workflow. |
 
@@ -99,9 +102,14 @@ backward from the end: `-1` is the last column and `-2` is the next-to-last.
 | `catalog.longitude_column` | `8` | Longitude column in decimal degrees. |
 | `catalog.depth_column` | `9` | Event depth column in kilometres, interpreted according to `coordinates.event_vertical`. |
 | `catalog.event_id_column` | `-1` | Persistent positive integer serial `EventID`. IDs must be unique, but need not be consecutive or equal to row numbers. |
+| `catalog.origin_time_columns` | `[1, 2, 3, 4, 5, 6]` | Year, month, day, hour, minute, and second columns. GraphSplit adds the solved origin-time correction with full calendar rollover. Use `[]` when the catalog has no usable absolute origin times; the fields then remain unchanged and `dt0_s` is still available in the shift sidecar. |
+| `catalog.origin_time_decimals` | `6` | Decimal places written in the corrected seconds field. This controls text precision only, not the internal solve. Allowed range: 0–12. |
 
-The latitude, longitude, depth, and ID columns must be distinct. GraphSplit
-preserves all other columns when writing catalogs.
+The six origin-time columns, latitude, longitude, depth, and ID columns must be
+distinct. GraphSplit replaces the configured location and origin-time fields
+and preserves all other columns. If an active event has invalid calendar fields,
+GraphSplit leaves those fields unchanged, emits a warning, and retains its
+correction in `catalog_*_dxdydzt0.txt`.
 
 ## 6. Starting hypocenters: `[initialization]`
 
@@ -277,7 +285,7 @@ or have trusted event locations.
 | `gauge.reference_velocity_ms` | 5000.0 | Metres-to-seconds scaling for `zero_mean = "xyzt0_scaled"`. It has no effect in other gauge choices. |
 | `gauge.pin_event_ids` | `[]` | Persistent serial `EventID` values to hold fixed in pin mode, for example `[3, 50, 67]`. These are IDs from the configured catalog ID column—not row numbers. At least one is required when `mode = "pin"`. |
 | `gauge.pin_fields` | `"xyz"` | Fields fixed for each listed event: any combination of `x`, `y`, `z`, and `t0`, such as `"xy"`, `"z"`, or `"xyzt0"`. `xyz` fixes the location but still solves relative origin time. |
-| `gauge.pin_reference_catalog` | `""` | Optional catalog supplying trusted latitude/longitude/depth for pinned IDs. Empty means pin at the in-memory seed: normally `io.catalog_file`, or the common seed selected by `[initialization]`. The trusted file may contain only the pinned events and may use any row order, but it must use the same column layout configured under `[catalog]` and contain every listed serial ID. Trusted catalog date/time fields are not imported; a pinned `t0` is held at GraphSplit's initial relative value of zero. |
+| `gauge.pin_reference_catalog` | `""` | Optional catalog supplying trusted latitude/longitude/depth for pinned IDs. Empty means pin at the in-memory seed: normally `io.catalog_file`, or the common seed selected by `[initialization]`. The trusted file may contain only the pinned events and may use any row order, but it must use the same column layout configured under `[catalog]` and contain every listed serial ID. Trusted catalog date/time fields are not imported; a pinned `t0` is held at zero in an ordinary run or at its restored cumulative value in a DD-only pass. |
 
 ### Trusted catalog example
 
@@ -483,6 +491,12 @@ specific connectivity weakness. It is not a general “improve locations” swit
 
 ## 16. Output switches: `[output]`
 
+Every completed relocation writes the two full catalogs and their
+`catalog_preloc_dxdydzt0.txt` and `catalog_dd_dxdydzt0.txt` sidecars. The
+sidecars use metres for x/y/z, seconds for `t0`, and contain every input event
+ID; their format and cumulative semantics are described in
+[FILE_FORMATS.md](FILE_FORMATS.md#relocation-shift-sidecars).
+
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `output.write_filtered_catalogs` | `true` | Write `catalog_preloc_filt.txt` and `catalog_dd_filt.txt`, containing only events that participated in retained observations for the relevant stage. The full catalogs are always written. |
@@ -598,14 +612,17 @@ explicitly so a user never has to discover them in source code.
 ```toml
 [io]
 catalog_file = "../pass1/catalog_dd.txt"
+restart_shift_file = "../pass1/catalog_dd_dxdydzt0.txt"
 output_dir = "pass2"
 
 [run]
 prelocation = false
 ```
 
-You may also tighten graph radius/degree in the second pass. This is simply a
-new run using the first output as its seed.
+The catalog and shift file must come from the same pass. You may tighten graph
+radius or degree after a broad first graph has improved a poor sparse-network
+seed. The restored cumulative `t0` keeps the new theta residuals consistent;
+only the new time increment is added to the already-corrected calendar.
 
 ### Trusted partial pins
 

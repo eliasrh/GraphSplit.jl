@@ -34,6 +34,11 @@ whose two theta entries share the same DDSync reference:
 theta_i - theta_j = (t0_i - t0_j) + (T_i - T_j).
 ```
 
+Here `t0` is the correction to the catalog origin time. A positive value moves
+the origin later. GraphSplit applies it to the year/month/day/hour/minute/second
+fields in each relocated catalog, in the same practical style as HypoDD, and
+also writes the four-component local shift separately for every event ID.
+
 Both stages use robust Gauss–Newton/Huber IRLS. The Jacobian is never assembled
 as a general sparse matrix. Its forward and adjoint products are evaluated
 observation by observation, and the normal equations are solved by PCG with a
@@ -100,9 +105,12 @@ GraphSplit therefore requires `run.prelocation = true` for both common modes.
 Stage 2 is built only after Stage 1; constructing a nearest-neighbor graph
 directly from coincident points would give arbitrary pairs.
 
-The input catalog is still required for persistent event IDs and preserved
-date/time/auxiliary columns. With a common mode, its latitude, longitude, and
-depth columns no longer provide individual seeds. The native lookup-table
+The input catalog is still required for persistent event IDs, origin times, and
+auxiliary columns. With a common mode, its latitude, longitude, and depth
+columns no longer provide individual seeds. If usable calendar origin times are
+not available, set `catalog.origin_time_columns = []`; the catalog time-like
+fields will then remain unchanged and the `dt0_s` shift sidecar is the timing
+result. The native lookup-table
 coverage check includes both the input catalog footprint and the overridden
 common seed.
 
@@ -228,6 +236,14 @@ parameters. Use PCG for production. Step clipping is disabled by default;
 `max_event_step_m` and `max_origin_step_s` are emergency safeguards rather than
 a convergence strategy.
 
+Both stages write a cumulative shift file alongside the relocated catalog. Its
+columns are `dx_m dy_m dz_m dt0_s EventID`: x is local east, y is local north,
+z follows `coordinates.event_vertical`, and positive `dt0_s` is later. An event
+that has never entered a retained relocation has four zeros. The prelocation
+file describes the Stage-1 state; the DD file describes the final state. These
+plain-unit sidecars are convenient for deformation, convergence, and catalog
+comparison analyses without differencing longitude and latitude.
+
 ## 8. Physical depth bounds and exact fixed depths
 
 Sparse stations at similar elevation can leave a real shallow/deep ambiguity.
@@ -303,10 +319,14 @@ depth. For an event active at the one-sided bound, the linearized z variance is
 written as `NaN` because a symmetric Gaussian approximation is misleading.
 Bootstrap samples remain the preferred depth-stability diagnostic.
 
-## 9. Recommended two-pass workflow
+## 9. Optional iterated DD graph
 
-A second run is simply another GraphSplit invocation. It does not need special
-code.
+Most catalogs need one Stage-1/Stage-2 run. A DD-only second pass is useful when
+the initial catalog may have large location errors and the network is sparse.
+Those conditions often occur together: Stage 1 may not change the solution much,
+while a broad, well-connected first Stage-2 graph can pull together events that
+are truly close but appeared distant in the seed catalog. A second pass can then
+construct a tighter kNN graph from the improved locations.
 
 First pass:
 
@@ -329,6 +349,7 @@ Second pass:
 ```toml
 [io]
 catalog_file = "../pass1/catalog_dd.txt"
+restart_shift_file = "../pass1/catalog_dd_dxdydzt0.txt"
 output_dir = "pass2"
 
 [run]
@@ -344,9 +365,15 @@ zero_mean = "origin_time"
 constraint_weight = 10.0
 ```
 
-This uses the first relocation as the seed, avoids repeating Stage 1, and lets
-the local graph contract around improved hypocenters. The numerical values are
-a starting schedule, not universal defaults.
+The catalog and shift file are a pair. The catalog already contains the first
+pass's corrected calendar times and locations; the shift file restores the
+cumulative internal `t0` values used in the theta prediction. GraphSplit applies
+only the newly estimated `t0` increment to the already-corrected calendar, so
+the correction is not doubled. Omitting the prior `t0` would make the first
+residual of the new DD solve inconsistent even when the locations look nearly
+identical, so GraphSplit requires `restart_shift_file` whenever prelocation is
+disabled. The numerical graph values above are a starting schedule, not
+universal defaults.
 
 ## 10. Uncertainty estimates
 
@@ -439,6 +466,7 @@ mistaken for unconstrained resolution.
 
 ## 13. Reproducibility checklist
 
-Archive the TOML, input catalog, station and velocity files, DDSync output,
-native table header/model file, `run_summary.toml`, graph metadata, and solver
-history. The serial ID is the join key across all of them.
+Archive the TOML, input and relocated catalogs, both relocation shift files,
+station and velocity files, DDSync output, native table header/model file,
+`run_summary.toml`, graph metadata, and solver history. The serial ID is the
+join key across all of them.

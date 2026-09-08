@@ -45,13 +45,22 @@ For example:
 ```
 
 With the defaults, this event has latitude 35.410000°, longitude −117.910000°,
-depth 4.2 km, and serial ID 3. Columns 1–6, magnitude, and any other auxiliary
-columns are preserved, but GraphSplit does not use catalog origin times as
-absolute constraints. Its relative origin-time corrections are internal
-nuisance parameters and are not written back to columns 1–6.
+depth 4.2 km, and serial ID 3. GraphSplit does not treat the input origin time as
+an absolute constraint, but it adds the solved relative `t0` correction to
+columns 1–6 when writing the relocated catalog. Positive `dt0_s` moves the
+origin later; year, month, and day rollover are handled as Gregorian calendar
+time. Magnitude and all other auxiliary columns are preserved.
 
-Output preserves the original column count and order, replacing only the three
-location columns. Filtered output preserves the original serial IDs.
+`catalog.origin_time_columns` identifies year/month/day/hour/minute/second and
+defaults to `[1, 2, 3, 4, 5, 6]`. Set it to `[]` for a point catalog or any input
+without usable calendar timing. Those fields are then copied unchanged, while
+the shift sidecar remains the authoritative `dt0_s` output. An active row with
+invalid calendar fields is likewise preserved with a warning. Output seconds
+use `catalog.origin_time_decimals` digits after the decimal (six by default).
+
+Output preserves the original column count and order, replacing the three
+location columns and, when configured, the six origin-time columns. Filtered
+output preserves the original serial IDs.
 
 With `initialization.mode = "common_centroid"` or `"common_manual"`, the
 latitude, longitude, and depth columns remain syntactically required but are
@@ -234,6 +243,46 @@ Do not edit the file. GraphSplit rejects unsupported or truncated headers and
 rebuilds incompatible tables when configured to do so. The header remains
 marked incomplete until both P and S cubes have been flushed, so an interrupted
 build cannot be mistaken for a valid table on the next run.
+
+## Relocation-shift sidecars
+
+Every run writes:
+
+```text
+catalog_preloc_dxdydzt0.txt
+catalog_dd_dxdydzt0.txt
+```
+
+Each contains every input event in input-catalog order:
+
+```text
+# dx_m dy_m dz_m dt0_s EventID
+12.450000 -3.200000 8.750000 0.014230000000 3
+0.000000 0.000000 0.000000 0.000000000000 50
+```
+
+`dx_m` is local east and `dy_m` is local north. `dz_m` follows the configured
+internal `coordinates.event_vertical` convention; under the default
+`positive_depth`, positive `dz_m` means deeper. `dt0_s` is the origin-time
+correction, with positive values meaning later. The coordinate reference and
+vertical convention are recorded in `run_summary.toml`.
+
+The prelocation file describes the Stage-1 state and the DD file describes the
+final state. Shifts are cumulative relative to the catalog supplied to the
+first pass. An event that has never participated in retained observations is
+written as `0 0 0 0 EventID`. On a later DD-only pass, an event without new
+support retains its earlier cumulative shift rather than being mislabeled as
+never relocated. As with the relocation itself, a common time shift is fixed by
+the selected gauge, so `dt0_s` is meaningful under that recorded gauge.
+
+For an iterated DD graph, set `io.catalog_file` to a prior `catalog_dd.txt` and
+`io.restart_shift_file` to the `catalog_dd_dxdydzt0.txt` from the same run. The
+restart reader joins by `EventID`, so row order may differ and the shift file may
+contain additional IDs, but every event in the working catalog must be present
+exactly once. GraphSplit restores cumulative `t0` for its theta prediction and
+adds only the newly solved time increment to the already-corrected input
+calendar. Use the same stations and coordinate convention if cumulative spatial
+shifts are to remain directly comparable across passes.
 
 ## Depth-constraint sidecars
 

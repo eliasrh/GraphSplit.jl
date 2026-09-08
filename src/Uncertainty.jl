@@ -339,7 +339,8 @@ end
 "Run a conditional Stage-2 block bootstrap and write samples separately from catalogs."
 function run_bootstrap_uncertainty(catalog::Catalog, groups::Vector{ThetaGroup}, nominal::State,
         stations::Stations, obs::Observations, travel_time::AbstractTravelTimeModel,
-        event_mask::AbstractVector{Bool}, output::AbstractString, cfg::AbstractDict)
+        event_mask::AbstractVector{Bool}, output::AbstractString, cfg::AbstractDict;
+        origin_time_basis::AbstractVector{<:Real}=zeros(length(catalog)))
     options = cfgget(cfg, "uncertainty", "bootstrap")
     replicates = Int(get(options, "replicates", 100))
     unit = lowercase(String(get(options, "resampling_unit", "station_phase")))
@@ -392,7 +393,8 @@ function run_bootstrap_uncertainty(catalog::Catalog, groups::Vector{ThetaGroup},
                 if write_catalogs
                     mask = event_mask .& active_events
                     write_catalog(joinpath(catalog_directory, @sprintf("catalog_dd_filt_boot_%04d.txt", replicate)),
-                        catalog, state, cfg; mask=mask)
+                        catalog, state, cfg; mask=mask, origin_time_basis=origin_time_basis,
+                        origin_time_activity=mask)
                 end
             end
             @printf("  bootstrap %4d/%d: blocks %d/%d; active events %d; %s\n", replicate, replicates,

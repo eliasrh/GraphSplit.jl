@@ -7,6 +7,8 @@ stations_file = "stations.txt"
 theta_dir = "theta"
 thetastd_dir = "thetastd"
 output_dir = "graphsplit_output"
+# For a DD-only second pass, also set:
+# restart_shift_file = "../pass1/catalog_dd_dxdydzt0.txt"
 
 # Normally use the catalog hypocenters. To locate without single-event seed
 # locations, use "common_centroid" or "common_manual" and keep Stage 1 enabled.

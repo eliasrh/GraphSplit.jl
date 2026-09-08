@@ -9,6 +9,9 @@
 [io]
 # Starting catalog with seed latitude/longitude/depth and a persistent serial ID.
 catalog_file = "catalog.txt"
+# Cumulative shift sidecar paired with catalog_file for an advanced DD-only pass.
+# Leave empty for an ordinary Stage-1 + Stage-2 run.
+restart_shift_file = ""
 # STA lat lon elevation_m, or NET STA lat lon elevation_m.
 stations_file = "stations.txt"
 # DDSync theta_<STA>_<P|S>.txt directory.
@@ -33,6 +36,10 @@ longitude_column = 8
 depth_column = 9
 # -1 is the final column. IDs must be unique positive integers.
 event_id_column = -1
+# Year, month, day, hour, minute, and second columns. [] leaves calendar fields unchanged.
+origin_time_columns = [1, 2, 3, 4, 5, 6]
+# Decimal places used for output seconds after applying the solved t0 correction.
+origin_time_decimals = 6
 
 [initialization]
 # catalog | common_centroid | common_manual. Common modes require Stage 1.
@@ -250,7 +257,7 @@ maximum_added_per_event = 3
 power_iterations = 30
 
 [output]
-# Full prelocation and DD catalogs are always written.
+# Full prelocation/DD catalogs and cumulative space-time shift sidecars are always written.
 write_filtered_catalogs = true
 # Write catalog_dd_graphmeta.csv.
 write_graph_metadata = true

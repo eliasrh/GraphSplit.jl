@@ -1,7 +1,7 @@
 name = "GraphSplit"
 uuid = "bd73e4b1-4f7a-4cbc-a1a8-2c401a6c329d"
 authors = ["Elías Rafn Heimisson"]
-version = "0.3.0"
+version = "0.4.0"
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"

@@ -44,6 +44,7 @@ hypocenters are overridden in memory.
 ```toml
 [io]
 catalog_file = "../pass1/catalog_dd.txt"
+restart_shift_file = "../pass1/catalog_dd_dxdydzt0.txt"
 output_dir = "pass2"
 
 [run]
@@ -55,8 +56,11 @@ maximum_degree = 60
 maximum_distance_km = 5.0
 ```
 
-This is the complete iterative mechanism: the previous DD output is the next
-seed, and Stage 1 is disabled.
+The catalog and shift sidecar must come from the same pass. This advanced
+workflow is most useful when a poor seed and sparse network require a broad,
+well-connected first graph; the second pass can then build a tighter graph from
+the improved event locations. The sidecar restores cumulative `t0`, while only
+the new time increment is applied to the already-corrected calendar.
 
 ## Pin exact serial IDs at their seed locations
 

@@ -18,6 +18,8 @@
   unambiguous augmentation/uncertainty validation;
 - common-centroid/manual initialization, its Stage-1 requirement, and lookup
   coverage of overridden manual seeds;
+- Gregorian origin-time rollover, disabled/invalid calendar handling, cumulative
+  x/y/z/t0 sidecars, serial-ID restart joins, and restart prediction equivalence;
 - exact fixed-depth parameter removal, positive/negative vertical conventions,
   reflected-depth feasibility, and an active-set crossing/release regression;
 - exact station-phase bootstrap multiplicities, sample quantiles/covariances,
@@ -39,7 +41,9 @@ For a new field dataset, validate in this order:
 1. build a table and inspect its reported grid size and coverage;
 2. run a basic solution and check convergence and graph support;
 3. compare Cartesian and radial solutions if aperture makes curvature relevant;
-4. rerun from the first `catalog_dd.txt` with prelocation disabled;
+4. when testing an iterated graph, rerun from the first `catalog_dd.txt` with
+   prelocation disabled and its matching `catalog_dd_dxdydzt0.txt` supplied as
+   `io.restart_shift_file`;
 5. test pins only when their serial IDs and reference locations are trusted;
 6. if using a physical depth bound, compare an unconstrained diagnostic run,
    inspect reflected IDs and final bound-active events, and do not interpret a
@@ -71,5 +75,6 @@ benchmark README.
 
 For v0.2.0, GitHub Actions completed all 315 checks successfully on Julia 1.10
 and the current stable Julia release on 2026-09-01. The two-version CI workflow
-remains the authoritative runtime gate for later changes. The v0.3.0 depth
-constraint tests will enter that runtime gate with the release commit.
+remains the authoritative release gate. The complete v0.4.0 working tree passes
+386 checks locally on Julia 1.10.10, including the depth-constraint and catalog
+time/shift restart regressions.
