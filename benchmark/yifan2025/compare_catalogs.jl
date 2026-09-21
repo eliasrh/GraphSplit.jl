@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 
 # Standalone, standard-library-only reproduction of the location metrics in
-# Yu, Ellsworth & Beroza (2025), following their public error_analysis.py.
+# Yu, Ellsworth & Beroza (2025), with half-sum Chamfer (see README.md).
 
 using Printf
 
@@ -111,7 +111,7 @@ function benchmark_enu_km(lat, lon, depth_km)
     return east, north, down
 end
 
-"Point Cloud Utils convention: half the sum of the two mean nearest-neighbor Euclidean distances."
+"Half-sum Chamfer convention; multiply by two to compare with Yu's Python evaluation."
 function chamfer_distance(x1, y1, z1, x2, y2, z2)
     function directed(ax, ay, az, bx, by, bz)
         total = 0.0

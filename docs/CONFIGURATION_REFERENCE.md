@@ -93,7 +93,7 @@ See [FILE_FORMATS.md](FILE_FORMATS.md) for column-by-column examples.
 
 ## 5. Catalog columns: `[catalog]`
 
-Column numbers are one-based, as in Julia and MATLAB. A negative number counts
+Column numbers are one-based. A negative number counts
 backward from the end: `-1` is the last column and `-2` is the next-to-last.
 
 | Setting | Default | Meaning |
@@ -169,7 +169,7 @@ settings describe how geographic inputs are converted into internal metres.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `travel_time.type` | `"lookup"` | `lookup` uses the native layered-model table. `constant` bypasses table building and is intended mainly for synthetic tests. |
-| `travel_time.table_file` | `"lookuptable/graphsplit_tt.gstt"` | Native memory-mapped table path. The parent directory is created automatically. MATLAB `.mat` tables are not accepted. |
+| `travel_time.table_file` | `"lookuptable/graphsplit_tt.gstt"` | Native memory-mapped table path. The parent directory is created automatically. Only the native `.gstt` format is supported. |
 | `travel_time.velocity_model_file` | `"vm.txt"` | Layered P/S velocity model used to build or validate a lookup table. Its SHA-256 digest is stored in the table. |
 | `travel_time.geometry` | `"auto"` | Geometry required when opening a table: `auto`, `cartesian`, or `radial`. `auto` reads an existing table's geometry. If a table must be built, `auto` delegates to `build_geometry`. An explicit geometry rejects/rebuilds a table of the other type. |
 | `travel_time.build_geometry` | `"cartesian"` | Builder used when `geometry = "auto"` and no compatible table exists. `cartesian` is flat local range; `radial` uses spherical central angle. |

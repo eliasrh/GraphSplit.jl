@@ -363,3 +363,7 @@ latitude longitude depth_km [optional columns...]
 
 Catalog serial ID `k` selects truth row `k`. The benchmark utility checks that
 every requested row exists.
+
+The true-location file is not distributed with GraphSplit. See the
+[benchmark data source and citation](../benchmark/yifan2025/README.md#data-source-and-citation)
+for retrieval instructions.

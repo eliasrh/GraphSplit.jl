@@ -67,7 +67,7 @@ event_z0_m = 0.0
 [travel_time]
 # lookup uses a native layered-model table; constant is mainly for synthetic tests.
 type = "lookup"
-# Native memory-mapped table. MATLAB .mat tables are not accepted.
+# Native memory-mapped .gstt travel-time table.
 table_file = "lookuptable/graphsplit_tt.gstt"
 # Layered depth/Vp/Vs model used to build and validate the lookup table.
 velocity_model_file = "vm.txt"

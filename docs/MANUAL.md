@@ -63,8 +63,8 @@ Copy `config/graphsplit_template.toml` into it. Paths in the TOML are resolved
 relative to that TOML, so the runner can be launched from anywhere:
 
 ```bash
-julia --project=/path/to/GraphSplitJulia \
-  /path/to/GraphSplitJulia/run_graphsplit.jl \
+julia --project=/path/to/GraphSplit.jl \
+  /path/to/GraphSplit.jl/run_graphsplit.jl \
   /path/to/my_run/graphsplit.toml
 ```
 

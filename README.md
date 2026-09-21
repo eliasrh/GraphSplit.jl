@@ -8,6 +8,15 @@ matrix-free, and native travel-time tables are memory-mapped.
 GraphSplit uses only Julia standard libraries, supports Cartesian and radial
 layered-Earth travel times, and is controlled by one TOML file.
 
+## Manuscript
+
+**GraphSplit: Sparse Double-Difference Earthquake Relocation From Synchronized
+Differential-Time Graphs** (tentative title). Elías Rafn Heimisson.
+Submission year: **2026**.
+
+Software citation metadata are in [CITATION.cff](CITATION.cff). The manuscript
+citation will be updated when publication details are available.
+
 ## Start here
 
 The repository documentation is organized by task:
@@ -23,8 +32,6 @@ The repository documentation is organized by task:
    and uncertainty estimates.
 5. [Validation guide](docs/VALIDATION.md) — tests and checks to perform before
    interpreting a field catalog.
-6. [MATLAB parity notes](docs/MATLAB_PARITY.md) — what is preserved from the
-   prototype and what intentionally differs.
 
 New users should read the first three in that order. The minimal
 [`graphsplit_template.toml`](config/graphsplit_template.toml) contains the
@@ -70,7 +77,7 @@ Requirements: Julia 1.10 or later and a completed DDSync run.
 
    | Question | Setting |
    | --- | --- |
-   | Are the five input/output paths correct? | `[io]` |
+   | Are the input and output paths correct? | `[io]` |
    | Are individual catalog locations usable? | `initialization.mode` |
    | Is the network local or geographically broad? | `travel_time.build_geometry` |
    | Is the lookup spacing adequate? | `[lookup]` |
@@ -232,11 +239,34 @@ validation remains dataset-specific; follow [VALIDATION.md](docs/VALIDATION.md).
 
 ## Additional tools
 
-The independent comparator in `benchmark/yifan2025/` reports horizontal/depth
-accuracy, local neighbor-pair precision, and point-cloud Chamfer distance. The
-coherent theta-bias scan remains experimental and disabled by default.
+The [benchmark comparator](benchmark/yifan2025/README.md) reports
+horizontal/depth accuracy, local neighbor-pair precision, and point-cloud
+Chamfer distance. Its README defines the metrics, including the Chamfer
+normalization, and explains how to obtain the external true locations.
+The coherent theta-bias scan remains experimental and disabled by default.
+
+## Benchmark data attribution
+
+The example catalog, station coordinates and velocity model in
+`benchmark/yifan2025/input/` come from the synthetic experiment of:
+
+Yu, Y., Ellsworth, W. L., and Beroza, G. C. (2025). *Accuracy and Precision of
+Earthquake Location Programs: Insights from a Synthetic Controlled Experiment*.
+**Seismological Research Letters, 96**(3), 1860–1874.
+[https://doi.org/10.1785/0220240354](https://doi.org/10.1785/0220240354).
+
+Please cite that paper when using these example data. The authors' code and
+source data are available from
+[Yu's benchmark repository](https://github.com/YuYifan2000/comparison_hypoDD_GrowClust).
+True locations are not distributed here; obtain the matching realization
+through that repository's instructions. The example inputs do not include the
+DDSync potentials needed to run a relocation.
 
 ## Citation and license
 
-Citation metadata are in `CITATION.cff`. GraphSplit is distributed under the
-GraphSplit Non-Commercial License v1.0 in `LICENSE`.
+Cite the GraphSplit manuscript when publication details are available, and
+identify the software version or commit used. Software metadata are in
+[CITATION.cff](CITATION.cff). GraphSplit is distributed under the
+[GraphSplit Non-Commercial License v1.0](LICENSE). Benchmark source-data
+attribution is separate from the software license; retain the Yu et al.
+citation when reusing those inputs.

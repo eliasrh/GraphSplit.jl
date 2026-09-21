@@ -56,25 +56,16 @@ For a new field dataset, validate in this order:
 9. for a published uncertainty result, inspect bootstrap sample clouds and the
    valid-replicate fraction rather than relying only on covariance summaries.
 
-## Current execution boundary
+## Interpreting validation
 
-The source was parsed as Julia and the configuration files were parsed as TOML
-in the build environment used to assemble this release. That environment did
-not contain a Julia runtime, so the repository test suite could not be executed
-there. A subsequent user-run Julia execution on macOS completed the bundled
-1,000-event Cartesian example end to end, including native table construction
-and both relocation stages. The first full `Pkg.test()` run on Julia 1.12.3
-passed 259 checks and exposed a removed byte-vector `read` method in the native
-table reader; v0.1.3 replaces it with the version-portable `read!` API.
-Independent translations of the homogeneous fast-sweeping equations
-converged in two outer sweeps on the test grid; the Cartesian coordinate-axis
-errors were below `4e-16 s`, and the radial same-depth surface error against the
-constant-velocity chord time was below `3e-8 s`. An independent evaluation of
-the bundled benchmark seed also produced the smoke-test metrics recorded in the
-benchmark README.
+The automated suite checks numerical operations, file formats, constraints and
+restart behavior. It does not establish location accuracy or uncertainty
+calibration for a new dataset. Retain the exact software revision, TOML and
+input files for each reported run, and use the dataset checks above alongside
+the solver's convergence diagnostics.
 
-For v0.2.0, GitHub Actions completed all 315 checks successfully on Julia 1.10
-and the current stable Julia release on 2026-09-01. The two-version CI workflow
-remains the authoritative release gate. The complete v0.4.0 working tree passes
-386 checks locally on Julia 1.10.10, including the depth-constraint and catalog
-time/shift restart regressions.
+GitHub Actions reports results for each tested revision on Julia 1.10 and the
+current stable release. A local `Pkg.test()` run is also recommended before a
+new analysis, particularly after changing Julia versions. The comparator's
+smoke test generates its own small truth dataset; it does not depend on the
+external Yu true-location file.
