@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use GraphSplit in your research, please cite the software using this metadata."
+message: "If you use GraphSplit in your research, please cite the manuscript below and the software version used. The preprint is in moderation."
 title: "GraphSplit: Sparse graph relocation from synchronized differential travel times"
 type: software
 authors:
@@ -12,6 +12,16 @@ url: "https://github.com/eliasrh/GraphSplit.jl"
 license: "LicenseRef-GraphSplit-NonCommercial-1.0"
 version: "0.4.0"
 date-released: "2026-09-07"
+preferred-citation:
+  type: unpublished
+  title: "GraphSplit: Sparse Double-Difference Earthquake Relocation From Synchronized Differential-Time Graphs"
+  authors:
+    - family-names: "Heimisson"
+      given-names: "Elías Rafn"
+      orcid: "https://orcid.org/0000-0001-8342-7226"
+  year: 2026
+  doi: "10.1029/2026JB035934"
+  notes: "Submitted to Journal of Geophysical Research: Solid Earth; preprint in moderation."
 keywords:
   - seismology
   - earthquake relocation

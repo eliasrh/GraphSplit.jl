@@ -12,9 +12,43 @@ Tomography,” *Seismological Research Letters* (2026),
 
 GraphSplit operates on the synchronized station-phase arrival-time potentials
 rather than returning to the much larger `dt.cc` representation. This is a key
-part of its computational efficiency. Supply the same starting catalog used by
-DDSync, or a reordered/filtered catalog that preserves the persistent serial
-IDs in its final column. The serial ID—not the row number—is the join key.
+part of its computational efficiency. Choosing the matching catalog is
+essential because the event IDs connect locations to synchronized times.
+
+DDSyncJulia accepts arbitrary decimal integer IDs. If they do not form the
+complete range `1:N`, it assigns sequential IDs in catalog row order and
+writes `catalog_seq.txt` and `event_id_map.csv` beside its synchronized
+differential-time output. Its `theta` and `std_theta` files then use those
+sequential IDs, including their reference-event columns. In this case,
+set GraphSplit's `io.catalog_file` to **`catalog_seq.txt`**, not the original
+catalog. Preserve `event_id_map.csv` with the results to translate relocated
+IDs back to the external catalog. GraphSplit settings that name particular
+events, such as gauge pins or fixed depths, must use the mapped IDs too.
+
+When the input IDs already form `1:N`, DDSyncJulia preserves them and the
+original catalog remains the appropriate input. MATLAB DDSync does not have
+automatic mapping: reindex its catalog and pair headers consistently before
+running, then use that same catalog in GraphSplit.
+
+DDSync's normal `dt_sync.cc` always retains the original external IDs. When
+mapping was needed, `dt_sync_seq.cc` contains the same synchronized values
+under sequential IDs. These differential-time files are useful for other
+relocation programs; GraphSplit needs only the matching catalog and theta
+directories.
+
+Reordering catalog rows is safe when each ID remains attached to its event.
+Filtering can also preserve the original IDs, although removing a reference
+event can remove its Stage-1 constraints. Renumbering IDs after synchronization
+is different: doing so in only the catalog breaks its correspondence with
+theta values and reference events. Use the existing mapping throughout a
+pipeline rather than creating a new one at each stage.
+
+Users supplying compatible theta files without DDSync must maintain the same
+correspondence themselves. GraphSplit permits gaps, but its numeric file
+reader requires positive integer IDs no larger than 9,007,199,254,740,991
+(`2^53 - 1`). Larger IDs are rejected to prevent silent rounding. Reindex
+all ID-bearing inputs together before GraphSplit if external IDs exceed
+this range; DDSyncJulia's sequential outputs already satisfy the requirement.
 
 ## 1. What the two stages solve
 

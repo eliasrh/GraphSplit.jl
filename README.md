@@ -11,11 +11,12 @@ layered-Earth travel times, and is controlled by one TOML file.
 ## Manuscript
 
 **GraphSplit: Sparse Double-Difference Earthquake Relocation From Synchronized
-Differential-Time Graphs** (tentative title). Elías Rafn Heimisson.
-Submission year: **2026**.
+Differential-Time Graphs**. Elías Rafn Heimisson (2026).
+[doi:10.1029/2026JB035934](https://doi.org/10.1029/2026JB035934).
+Submitted to *Journal of Geophysical Research: Solid Earth*; the preprint
+is in moderation. The DOI is provided in advance and may not yet resolve.
 
-Software citation metadata are in [CITATION.cff](CITATION.cff). The manuscript
-citation will be updated when publication details are available.
+Software and manuscript citation metadata are in [CITATION.cff](CITATION.cff).
 
 ## Start here
 
@@ -48,8 +49,23 @@ theta/
 thetastd/
 ```
 
-The catalog supplied to GraphSplit must preserve DDSync's persistent serial
-`EventID` values. Matching is by ID, never by row number or row order.
+The catalog supplied to GraphSplit must use the same event IDs as the theta
+files. DDSyncJulia automatically maps external IDs when they do not form
+`1:N`. If it reports this mapping, use its **`catalog_seq.txt`** with the
+matching `theta/` and `thetastd/` directories, and keep `event_id_map.csv`
+to recover the original IDs. Otherwise, use the original catalog.
+
+DDSync's normal `dt_sync.cc` retains the external IDs. Its extra
+`dt_sync_seq.cc` uses the mapped IDs, but GraphSplit does not read either
+differential-time file. MATLAB DDSync does not perform automatic mapping;
+its inputs must still be reindexed consistently before synchronization.
+
+Catalog rows may be reordered while preserving their IDs. Do not renumber
+only the catalog after DDSync: theta values, reference IDs, uncertainty
+files and event-specific settings must continue to identify the same events.
+See the [manual](docs/MANUAL.md#0-before-you-do-anything-else) for the complete
+handoff and the [file formats](docs/FILE_FORMATS.md#catalog) for direct-input
+ID limits.
 
 ## Five-minute setup
 

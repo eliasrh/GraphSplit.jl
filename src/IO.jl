@@ -53,6 +53,17 @@ function resolved_column(requested::Integer, ncol::Integer, name::String)
     return column
 end
 
+"Validate an ID before converting from the numeric-file representation."
+function checked_event_id(value::Float64, source::AbstractString)
+    isfinite(value) && value > 0 && isinteger(value) ||
+        error("$source: event IDs must be finite positive integers")
+    # Exclude 2^53 itself: an external 2^53+1 would already have rounded to it.
+    value < 2.0^53 || error("$source: event ID is too large for exact numeric-file reading. " *
+        "Use DDSyncJulia's catalog_seq.txt with its matching theta/thetastd files, " *
+        "or reindex all ID-bearing inputs together before GraphSplit.")
+    return Int64(value)
+end
+
 function catalog_origin_columns(cfg::AbstractDict, ncol::Integer)
     requested = cfgget(cfg, "catalog", "origin_time_columns"; default=Int[])
     isempty(requested) && return Int[]
@@ -84,10 +95,7 @@ function read_catalog(path::AbstractString, cfg::AbstractDict=default_config())
     all(isfinite, depth) || error("Catalog depth column contains non-finite values")
 
     ids_float = raw[:, id_col]
-    all(isfinite, ids_float) || error("Catalog event IDs must be finite")
-    all(abs.(ids_float .- round.(ids_float)) .< 1.0e-8) || error("Catalog event IDs must be integer-valued")
-    ids = round.(Int64, ids_float)
-    all(value -> value > 0, ids) || error("Catalog serial event IDs must be positive")
+    ids = [checked_event_id(value, path) for value in ids_float]
     length(unique(ids)) == length(ids) || error("Catalog serial event IDs are not unique")
 
     return Catalog(String(path), raw, ids, lat, lon, depth, lat_col, lon_col, dep_col, id_col,
@@ -151,7 +159,7 @@ function read_std_entries(path::AbstractString)
     for row in axes(matrix, 1)
         idf = matrix[row, 1]
         isfinite(idf) || continue
-        id = round(Int64, idf)
+        id = checked_event_id(idf, path)
         sigma = matrix[row, 2]
         degree = has_degree && isfinite(matrix[row, 4]) ? round(Int32, matrix[row, 4]) : Int32(0)
         result[id] = (sigma, degree)
@@ -176,9 +184,11 @@ function load_theta_folder(theta_dir::AbstractString, thetastd_dir::AbstractStri
         entries = Dict{Int64,ThetaEntry}()
         for row in axes(matrix, 1)
             idf, theta, reff = matrix[row, 1], matrix[row, 2], matrix[row, 3]
-            isfinite(idf) && isfinite(theta) && isfinite(reff) || continue
-            id = round(Int64, idf)
-            ref = round(Int64, reff)
+            isfinite(idf) || continue
+            id = checked_event_id(idf, path)
+            isfinite(reff) || continue
+            ref = checked_event_id(reff, path)
+            isfinite(theta) || continue
             sigma, degree = get(std, id, (NaN, Int32(0)))
             haskey(entries, id) || push!(event_ids, id)
             entries[id] = ThetaEntry(theta, ref, sigma, degree)
@@ -212,10 +222,7 @@ function read_catalog_shift(path::AbstractString, event_id::AbstractVector{<:Int
     size(raw, 2) == 5 || error("Restart shift file must contain five columns: dx_m dy_m dz_m dt0_s EventID")
     all(isfinite, raw) || error("Restart shift file contains non-finite values: $path")
     ids_float = raw[:, 5]
-    all(abs.(ids_float .- round.(ids_float)) .< 1.0e-8) ||
-        error("Restart shift EventIDs must be integer-valued")
-    ids = round.(Int64, ids_float)
-    all(>(0), ids) || error("Restart shift EventIDs must be positive")
+    ids = [checked_event_id(value, path) for value in ids_float]
     length(unique(ids)) == length(ids) || error("Restart shift EventIDs are not unique")
     rows = Dict(id => row for (row, id) in enumerate(ids))
     missing = setdiff(Int64.(event_id), ids)

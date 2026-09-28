@@ -636,3 +636,5 @@ end
         @test length(model.depth_m) == 10
     end
 end
+
+include("event_ids.jl")

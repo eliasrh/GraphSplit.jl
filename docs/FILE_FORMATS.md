@@ -37,6 +37,19 @@ YYYY MM DD HH MM SS.sss latitude longitude depth_km magnitude ... EventID
 Defaults select columns 7/8/9 for latitude/longitude/depth and the final column
 for `EventID`. Override these one-based indices under `[catalog]`. IDs must be
 unique positive integers, but they need not be contiguous or match row order.
+They must not exceed 9,007,199,254,740,991 (`2^53 - 1`), the supported exact
+integer range of the numeric file reader. GraphSplit rejects larger IDs
+instead of rounding them. This applies to catalogs, theta event and reference
+IDs, theta uncertainty event IDs, and restart-shift event IDs.
+
+If DDSyncJulia reported automatic ID mapping, use its `catalog_seq.txt` and
+the matching theta directories. The external IDs in the original catalog
+and `dt_sync.cc` then belong to a different numbering system. Keep
+`event_id_map.csv` for translating GraphSplit results back to those external
+IDs. Reordering rows with their IDs attached is allowed; independently
+renumbering the catalog after synchronization is not. When preparing theta
+files outside DDSync, apply any ID mapping consistently to every input,
+including reference IDs and event-specific constraint settings.
 
 For example:
 

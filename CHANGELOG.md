@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-09-28
+
+- Documented DDSyncJulia's automatic event-ID mapping and the matching
+  sequential catalog needed for GraphSplit. Clarified that catalog row order
+  may change, while event IDs must retain their correspondence after DDSync.
+- Added explicit errors for IDs outside the exact supported numeric range,
+  rather than allowing large external IDs to round silently during input.
+- Added the GraphSplit manuscript DOI and its preprint-in-moderation status.
+
 ## 0.4.0 — 2026-09-07
 
 - Applied solved relative origin-time corrections to configured catalog calendar
