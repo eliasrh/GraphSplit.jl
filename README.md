@@ -10,11 +10,8 @@ layered-Earth travel times, and is controlled by one TOML file.
 
 ## Manuscript
 
-**GraphSplit: Sparse Double-Difference Earthquake Relocation From Synchronized
-Differential-Time Graphs**. Elías Rafn Heimisson (2026).
-[doi:10.1029/2026JB035934](https://doi.org/10.1029/2026JB035934).
-Submitted to *Journal of Geophysical Research: Solid Earth*; the preprint
-is in moderation. The DOI is provided in advance and may not yet resolve.
+**Elías Rafn Heimisson**. GraphSplit: Sparse Double-Difference Earthquake Relocation From Synchronized Differential-Time Graphs. ESS Open Archive. 02 October 2026.
+DOI: https://doi.org/10.22541/essoar.15009811/v1
 
 Software and manuscript citation metadata are in [CITATION.cff](CITATION.cff).
 
