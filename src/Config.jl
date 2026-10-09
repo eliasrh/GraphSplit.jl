@@ -75,6 +75,23 @@ function default_config()
             "vs_ms" => 3464.0,
             "earth_radius_m" => 0.0,
         ),
+        "grid3d" => Dict{String,Any}(
+            "model_format" => "nll_velocity",
+            "vp_file" => "vp.mod.hdr",
+            "vs_file" => "vs.mod.hdr",
+            "time_root" => "time/model",
+            "coordinate_system" => "header",
+            "byte_order" => "little",
+            "spacing_m" => [500.0, 500.0, 500.0],
+            "bounds_km" => Float64[],
+            "model_interpolation" => "nearest",
+            "surface_file" => "",
+            "phases" => ["P", "S"],
+            "accuracy_order" => 2,
+            "cache_dir" => "lookuptable/3d",
+            "maximum_memory_gib" => 4.0,
+            "warning_memory_gib" => 1.0,
+        ),
         "lookup" => Dict{String,Any}(
             "horizontal_step_m" => 125.0,
             "depth_step_m" => 50.0,
@@ -232,6 +249,7 @@ function normalize_config_paths!(cfg::Dict{String,Any}, base::String)
         ("io", ("catalog_file", "restart_shift_file", "stations_file", "theta_dir", "thetastd_dir", "output_dir")),
         ("travel_time", ("table_file", "velocity_model_file")),
         ("gauge", ("pin_reference_catalog",)),
+        ("grid3d", ("vp_file", "vs_file", "time_root", "surface_file", "cache_dir")),
         ("experimental", ()),
     )
         node = cfg[section]
@@ -300,8 +318,9 @@ function validate_config(cfg::Dict{String,Any})
         error("run.prelocation=false requires io.restart_shift_file from the catalog used as the Stage-2 seed")
     do_prelocation && !isempty(restart_shift) &&
         error("io.restart_shift_file is only used when run.prelocation=false")
-    lowercase(String(cfgget(cfg, "travel_time", "type"))) in ("lookup", "constant", "constant_velocity", "constvel") ||
-        error("travel_time.type must be lookup or constant")
+    lowercase(String(cfgget(cfg, "travel_time", "type"))) in ("lookup", "constant", "constant_velocity", "constvel", "3d") ||
+        error("travel_time.type must be lookup, constant or 3d")
+    lowercase(String(cfgget(cfg, "travel_time", "type"))) == "3d" && validate_grid3d_config(cfg)
     if lowercase(String(cfgget(cfg, "travel_time", "type"))) == "lookup"
         endswith(lowercase(String(cfgget(cfg, "travel_time", "table_file"))), ".gstt") ||
             error("travel_time.table_file must use the native .gstt extension")

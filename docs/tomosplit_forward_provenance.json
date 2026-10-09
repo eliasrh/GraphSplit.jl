@@ -1,0 +1,7 @@
+{
+  "source": "TomoSplit.jl/src/Forward.jl",
+  "sha256": "19f211e27acfdba0b7e70921359bf3bc88345939539a225ce54bb0ea7e1e932a",
+  "git_head": "02c7e112240e2964f50fe8838cda94dcd4c0f31b",
+  "selection": "Grid3D, Model3D, interpolation/source helpers, _upwind_update; no tomography derivative storage or kernels",
+  "date": "2026-10-09"
+}

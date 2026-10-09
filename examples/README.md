@@ -193,3 +193,7 @@ probes = 12
 
 This writes `linerrxyz.txt`. Use `method = "both"` to produce it together with
 the bootstrap products.
+
+## Experimental fixed 3D velocity
+
+Use [the 3D TOML](../config/graphsplit_3d.toml) and [workflow guide](../docs/THREE_DIMENSIONAL_MODELS.md). A [small noisy synthetic example](three_dimensional/README.md) compares 1D and true-3D relocation.

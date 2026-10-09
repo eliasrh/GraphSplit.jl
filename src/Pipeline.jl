@@ -63,7 +63,7 @@ function write_summary(path::AbstractString, cfg::AbstractDict, catalog::Catalog
         "run" => Dict("completed_utc" => Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
             "config_file" => String(get(cfg, "_config_file", ""))),
         "inputs" => Dict("events" => length(catalog), "stations" => length(stations), "theta_groups" => length(groups)),
-        "travel_time" => Dict("geometry" => geometry, "type" => travel_time isa TravelTimeTable ? "lookup" : "constant"),
+        "travel_time" => Dict{String,Any}("geometry" => geometry, "type" => travel_time isa TravelTime3D ? "3d" : travel_time isa TravelTimeTable ? "lookup" : "constant"),
         "initialization" => Dict("mode" => String(cfgget(cfg, "initialization", "mode"; default="catalog"))),
         "catalog_output" => Dict(
             "origin_time_columns" => Int.(cfgget(cfg, "catalog", "origin_time_columns"; default=Int[])),
@@ -94,6 +94,7 @@ function write_summary(path::AbstractString, cfg::AbstractDict, catalog::Catalog
             "unconstrained_prelocation_pilot_ran" => prelocation_pilot !== nothing,
         ),
     )
+    travel_time isa TravelTime3D && merge!(summary["travel_time"], travel_time.metadata)
     open(path, "w") do io
         TOML.print(io, summary; sorted=true)
     end
@@ -137,8 +138,8 @@ function run(cfg::Dict{String,Any})
     travel_time = prepare_travel_time(cfg, stations, catalog, initial)
     if build_only
         result = (geometry=travel_time.geometry,
-            table_file=travel_time isa TravelTimeTable ? travel_time.file : "",
-            type=travel_time isa TravelTimeTable ? :lookup : :constant)
+            table_file=travel_time isa TravelTime3D ? travel_time.metadata["cache_dir"] : travel_time isa TravelTimeTable ? travel_time.file : "",
+            type=travel_time isa TravelTime3D ? :grid3d : travel_time isa TravelTimeTable ? :lookup : :constant)
         travel_time isa TravelTimeTable && close(travel_time.io)
         return result
     end

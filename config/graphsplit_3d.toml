@@ -1,0 +1,56 @@
+# EXPERIMENTAL: fixed 3D velocity relocation. See docs/THREE_DIMENSIONAL_MODELS.md.
+# Copy this beside your data; all paths are relative to this TOML file.
+[io]
+catalog_file = "catalog.txt"
+stations_file = "stations.txt"
+theta_dir = "theta"
+thetastd_dir = "thetastd"
+output_dir = "graphsplit_output_3d"
+
+[travel_time]
+type = "3d"
+geometry = "cartesian"
+auto_build = true
+auto_rebuild = true
+
+[grid3d]
+# nll_velocity builds travel times; nll_time imports existing station TIME grids.
+model_format = "nll_velocity"
+vp_file = "vp.mod.hdr"
+vs_file = "vs.mod.hdr"
+# For nll_time: expects time/model.P.STA.time.hdr/.buf, similarly for S.
+time_root = "time/model"
+# Read NonLinLoc SIMPLE from the header. Other geographic projections are rejected.
+coordinate_system = "header"
+byte_order = "little"
+# Only used when building from velocity. Halving all spacings uses ~8 times memory.
+spacing_m = [500.0, 500.0, 500.0]
+# Optional smaller box in MODEL coordinates: [xmin,xmax,ymin,ymax,zmin,zmax], km.
+bounds_km = []
+# nearest retains nodal jumps; slowness_linear is suitable for a smooth model.
+model_interpolation = "nearest"
+# Optional complete regular x_km y_km elevation_m grid. Empty = no air mask.
+surface_file = ""
+phases = ["P", "S"]
+accuracy_order = 2
+cache_dir = "lookuptable/3d"
+# These limits cover travel-time storage/building, not the entire relocation process.
+maximum_memory_gib = 4.0
+warning_memory_gib = 1.0
+
+[coordinates]
+station_vertical = "depth_from_elevation"
+event_vertical = "positive_depth"
+# Header SIMPLE coordinates are transformed automatically. A local/NONE model
+# instead needs grid3d.coordinate_system="local", reference="manual", and its
+# actual latitude/longitude origin entered below.
+reference = "stations_mean"
+reference_latitude = 0.0
+reference_longitude = 0.0
+
+[prelocation]
+# Keep single updates modest relative to the model extent; inspect boundary warnings.
+max_event_step_m = 500.0
+
+[relocation]
+max_event_step_m = 500.0

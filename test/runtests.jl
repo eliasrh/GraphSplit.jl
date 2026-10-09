@@ -638,3 +638,5 @@ end
 end
 
 include("event_ids.jl")
+
+include("three_dimensional_tests.jl")

@@ -1,12 +1,18 @@
 # GraphSplit.jl
 
+**Experimental 3D branch.** Fixed 3D velocity models and precomputed NonLinLoc
+travel-time grids are available here. Start with the [3D guide](docs/THREE_DIMENSIONAL_MODELS.md)
+and [3D TOML template](config/graphsplit_3d.toml). This work is separate from the
+submitted study; the 1D defaults are retained.
+
 GraphSplit relocates earthquake catalogs using the synchronized `theta` and
 `thetaStd` files produced by [DDSync](https://github.com/eliasrh/DDSync). It is
 designed for large catalogs: the event graph is sparse, the nonlinear solve is
 matrix-free, and native travel-time tables are memory-mapped.
 
 GraphSplit uses only Julia standard libraries, supports Cartesian and radial
-layered-Earth travel times, and is controlled by one TOML file.
+layered-Earth travel times, and is controlled by one TOML file. This branch also
+supports the experimental fixed-model 3D calculation described above.
 
 ## Manuscript
 

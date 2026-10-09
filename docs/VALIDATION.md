@@ -69,3 +69,20 @@ current stable release. A local `Pkg.test()` run is also recommended before a
 new analysis, particularly after changing Julia versions. The comparator's
 smoke test generates its own small truth dataset; it does not depend on the
 external Yu true-location file.
+
+## Experimental fixed 3D models
+
+`test/three_dimensional_tests.jl` runs with the standard suite. It checks analytic
+uniform-medium times and refinement; the head wave across a planar velocity
+interface; elevated/off-node stations and terrain masking; NLL axis order,
+precision, endian conversion and geographic derivatives; memory refusal before
+cache allocation; damaged/stale cache rejection; precomputed TIME import and
+source coordinates; and a complete small relocation with output files.
+
+The [noisy 3D example](../examples/three_dimensional/README.md) separately exercises
+both relocation stages with a finer synthetic-data grid. These tests establish
+basic numerical and integration behavior, not field accuracy. For a new model,
+check station elevations and the vertical datum, inspect velocity layers on the
+actual forward grid, compare a subset at finer spacing, and examine every
+boundary warning. Imported TIME grids inherit the assumptions and errors of the
+program that generated them.

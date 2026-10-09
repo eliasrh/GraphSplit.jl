@@ -1,5 +1,10 @@
 # GraphSplit manual
 
+For fixed 3D velocity models or NonLinLoc TIME grids on this experimental
+branch, use the [3D workflow](THREE_DIMENSIONAL_MODELS.md). It explains model
+formats, elevation and terrain, grid resolution, memory limits and the small
+synthetic example. The layered-model workflow below remains the default.
+
 ## 0. Before you do anything else
 
 GraphSplit does not read `dt.cc` directly. First run

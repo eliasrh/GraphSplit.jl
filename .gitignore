@@ -8,3 +8,5 @@ benchmark/yifan2025/input/yifan_benchmark_*.csv
 .DS_Store
 /Manifest.toml
 /Manifest-v*.toml
+
+/examples/three_dimensional/generated/

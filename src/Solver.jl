@@ -385,6 +385,11 @@ function solve_relocation(initial::State, stations::Stations, obs::Observations,
         update, inner_iterations, inner_converged, bound_engaged, bound_contact =
             solve_model_update(system, rhs, damping, state, solver_cfg, cfg, base_active,
                 preconditioner_name, linear_solver, inner_tolerance, inner_maximum)
+        factor = 1.0
+        if travel_time isa TravelTime3D
+            factor = restrict_grid3d_step!(update, state, travel_time)
+            factor < 1 && fill!(bound_contact, false)
+        end
         depth_bound_hits .+= Int.(bound_engaged)
         final_depth_bound_active .= bound_contact
         if !inner_converged
@@ -409,7 +414,7 @@ function solve_relocation(initial::State, stations::Stations, obs::Observations,
         Bool(get(solver_cfg, "verbose", true)) && any(bound_engaged) &&
             @printf("             depth bound engaged for %d events (%d at boundary after step limiting)\n",
                 count(bound_engaged), count(bound_contact))
-        if iteration >= minimum_outer
+        if iteration >= minimum_outer && factor == 1.0
             small_step = spatial_rms <= Float64(get(solver_cfg, "stop_step_rms_m", 0.1)) &&
                 time_rms <= Float64(get(solver_cfg, "stop_step_rms_s", 1.0e-4))
             if small_step

@@ -168,7 +168,7 @@ settings describe how geographic inputs are converted into internal metres.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `travel_time.type` | `"lookup"` | `lookup` uses the native layered-model table. `constant` bypasses table building and is intended mainly for synthetic tests. |
+| `travel_time.type` | `"lookup"` | `lookup` uses the native layered-model table. `constant` bypasses table building and is intended mainly for synthetic tests. Experimental `3d` uses `[grid3d]`; see the [3D guide](THREE_DIMENSIONAL_MODELS.md). |
 | `travel_time.table_file` | `"lookuptable/graphsplit_tt.gstt"` | Native memory-mapped table path. The parent directory is created automatically. Only the native `.gstt` format is supported. |
 | `travel_time.velocity_model_file` | `"vm.txt"` | Layered P/S velocity model used to build or validate a lookup table. Its SHA-256 digest is stored in the table. |
 | `travel_time.geometry` | `"auto"` | Geometry required when opening a table: `auto`, `cartesian`, or `radial`. `auto` reads an existing table's geometry. If a table must be built, `auto` delegates to `build_geometry`. An explicit geometry rejects/rebuilds a table of the other type. |
@@ -635,3 +635,36 @@ For any published result, retain the actual TOML alongside the input catalog,
 stations, velocity model, theta/thetaStd folders, `run_summary.toml`, graph
 metadata, and solver history. The complete/default TOML documents software
 defaults, but only the run-specific TOML records which values you changed.
+
+
+## Experimental fixed 3D grids: `[grid3d]`
+
+These settings apply only when `travel_time.type = "3d"`. Read the
+[3D workflow](THREE_DIMENSIONAL_MODELS.md) before choosing a grid. The ordinary
+`[lookup]` spacing settings and `travel_time.clamp_to_grid` do not control 3D
+volumes. Queries outside the valid 3D domain are always rejected.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `grid3d.model_format` | `"nll_velocity"` | Build from velocity grids, or use `"nll_time"` for precomputed station TIME grids. |
+| `grid3d.vp_file` | `"vp.mod.hdr"` | P model header; matching `.buf` is required. |
+| `grid3d.vs_file` | `"vs.mod.hdr"` | S model header; required only when S is included in `phases`. |
+| `grid3d.time_root` | `"time/model"` | Imported TIME filename prefix, followed by `.P.STA.time.hdr` or `.S.STA.time.hdr`. |
+| `grid3d.coordinate_system` | `"header"` | Use the header's SIMPLE geographic transform. `"local"` requires a missing/NONE transform and a manual GraphSplit reference. |
+| `grid3d.byte_order` | `"little"` | Binary input byte order: `little`, `big` or `native`. The header does not encode byte order. |
+| `grid3d.spacing_m` | `[500.0,500.0,500.0]` | Maximum x/y/z spacing when building from velocity, metres. Imported TIME grids retain their native spacing. |
+| `grid3d.bounds_km` | `[]` | Empty uses the model box. Otherwise give `[xmin,xmax,ymin,ymax,zmin,zmax]` in model coordinates. Must lie inside the velocity model; not supported for TIME imports. |
+| `grid3d.model_interpolation` | `"nearest"` | Transfer input velocity by nearest node, or interpolate reciprocal velocity with `"slowness_linear"`. Only used for velocity models. |
+| `grid3d.surface_file` | `""` | Optional regular `x_km y_km elevation_m` surface grid. Above-surface nodes cannot be used. Empty treats the whole box as material. |
+| `grid3d.phases` | `["P","S"]` | Build/import these phases for every station in `stations.txt`. Use `["P"]` for a P-only dataset; omit unused stations to reduce storage. |
+| `grid3d.accuracy_order` | `2` | FMM upwind order, 1 or 2; second order falls back where unavailable. Ignored for imported TIME grids. |
+| `grid3d.cache_dir` | `"lookuptable/3d"` | One content-identified cache directory per model/settings/station combination. Interrupted or damaged caches are rebuilt when allowed. |
+| `grid3d.maximum_memory_gib` | `4.0` | Refuse a larger travel-time build estimate before grid allocation. Excludes location-solver memory and the Julia runtime. |
+| `grid3d.warning_memory_gib` | `1.0` | Warn at this estimate. Must not exceed `maximum_memory_gib`. |
+
+Velocity and time volumes must share their grid and projection. Times use seconds;
+velocity grids may use NonLinLoc `VELOCITY` (km/s), `VELOCITY_METERS` (m/s),
+`SLOWNESS` (s/km), or `SLOW_LEN` (seconds across one x cell; equal native cell
+spacing required). FLOAT and DOUBLE buffers are supported. The reader converts
+units before use. Invalid values, incompatible projections, missing phases and
+source-coordinate mismatches are errors.

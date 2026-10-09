@@ -408,6 +408,7 @@ end
 function prepare_travel_time(cfg::AbstractDict, stations::Stations, catalog::Catalog, state::State;
         force_build::Bool=false)
     kind = lowercase(String(cfgget(cfg, "travel_time", "type"; default="lookup")))
+    kind == "3d" && return prepare_travel_time_3d(cfg, stations, catalog, state; force_build=force_build)
     requested = normalize_geometry(String(cfgget(cfg, "travel_time", "geometry"; default="auto")))
     if kind in ("constant", "constant_velocity", "constvel")
         geometry = requested == :auto ? normalize_geometry(String(cfgget(cfg, "travel_time", "build_geometry"))) : requested

@@ -380,3 +380,10 @@ every requested row exists.
 The true-location file is not distributed with GraphSplit. See the
 [benchmark data source and citation](../benchmark/yifan2025/README.md#data-source-and-citation)
 for retrieval instructions.
+
+## Experimental 3D velocity and travel-time grids
+
+The [3D guide](THREE_DIMENSIONAL_MODELS.md) defines the NonLinLoc model and TIME
+inputs, coordinate conventions, surface-file format and cache lifecycle. A
+3D run replaces `vm.txt` with the files selected under `[grid3d]`. Catalogs,
+stations and theta inputs keep their existing formats.
