@@ -13,12 +13,18 @@ end
 
 function validate_grid3d_config(cfg)
     o=cfg["grid3d"]
-    o["model_format"] in ("nll_velocity","nll_time")||error("grid3d.model_format must be nll_velocity or nll_time")
-    o["coordinate_system"] in ("header","local")||error("grid3d.coordinate_system must be header or local")
+    o["model_format"] in ("nll_velocity","nll_time","ascii_velocity")||error("grid3d.model_format must be nll_velocity, nll_time or ascii_velocity")
+    if o["model_format"] == "ascii_velocity"
+        o["coordinate_system"] in ("geographic","local") || error("ASCII input requires coordinate_system=geographic (lat/lon) or local (x/y)")
+        cfg["coordinates"]["reference"] == "manual" || error("ASCII velocity input requires a manual geographic reference")
+    else
+        o["coordinate_system"] in ("header","local") || error("NLL input requires coordinate_system=header or local")
+    end
     o["coordinate_system"]=="local"&&cfg["coordinates"]["reference"]!="manual"&&
         error("A local 3D grid requires coordinates.reference=manual so that its origin cannot change with the catalog")
     o["byte_order"] in ("little","big","native")||error("grid3d.byte_order must be little, big or native")
     o["model_interpolation"] in ("nearest","slowness_linear")||error("grid3d.model_interpolation must be nearest or slowness_linear")
+    o["model_sampling"] in ("cell_centers","nodes")||error("grid3d.model_sampling must be cell_centers or nodes")
     s=o["spacing_m"];length(s)==3&&all(x->isfinite(x)&&x>0,s)||error("grid3d.spacing_m needs three positive spacings in metres")
     b=o["bounds_km"];(isempty(b)||(length(b)==6&&all(isfinite,b)&&all(b[2a]>b[2a-1] for a in 1:3)))||error("grid3d.bounds_km must be empty or [xmin,xmax,ymin,ymax,zmin,zmax]")
     o["model_format"]=="nll_time"&&!isempty(b)&&error("Precomputed TIME grids retain their native extent; bounds_km must be empty")
@@ -117,23 +123,26 @@ end
 function prepare_travel_time_3d(cfg,stations,catalog,state;force_build=false)
     validate_grid3d_config(cfg);o=cfg["grid3d"];format=o["model_format"]
     phases=UInt8[p=="P" ? 1 : 2 for p in o["phases"]]
-    headers=Dict{Tuple{UInt8,Int},NLLHeader3D}();inputs=String[]
+    headers=Dict{Tuple{UInt8,Int},Union{NLLHeader3D,ASCIIVelocityHeader3D}}();inputs=String[]
+    velocity_mode = format != "nll_time"
     for phase in phases
-        for j in (format=="nll_velocity" ? (0:0) : (1:length(stations)))
+        for j in (velocity_mode ? (0:0) : (1:length(stations)))
             label=phase==1 ? "P" : "S"
             if j>0
                 occursin(r"^[A-Za-z0-9_.-]+$",stations.id[j])||error("Station code cannot be used in an NLL filename: $(stations.id[j])")
             end
-            path=format=="nll_velocity" ? o[phase==1 ? "vp_file" : "vs_file"] : o["time_root"]*".$label.$(stations.id[j]).time.hdr"
+            path=velocity_mode ? o[phase==1 ? "vp_file" : "vs_file"] : o["time_root"]*".$label.$(stations.id[j]).time.hdr"
             isempty(path)&&error("Missing 3D $label model path")
-            h=read_nll_header(path;coordinate_system=o["coordinate_system"]);headers[(phase,j)]=h
-            push!(inputs,h.file,nll_buffer_path(h))
+            h = format == "ascii_velocity" ? read_ascii_velocity_header(path,cfg) : read_nll_header(path;coordinate_system=o["coordinate_system"])
+            headers[(phase,j)]=h
+            push!(inputs,h.file)
+            h isa NLLHeader3D && push!(inputs,nll_buffer_path(h))
         end
     end
     h=first(values(headers));all(t->same_nll_grid(h,t),values(headers))||error("All 3D P/S and station grids must have identical dimensions, origin, spacing and projection")
     lo,hi,dims,nodes=grid3d_plan(h,o)
     surface_file=o["surface_file"];surface_bytes=isempty(surface_file) ? 0 : filesize(surface_file)
-    resources=grid3d_memory_guard(nodes,length(phases)*length(stations),maximum(nll_bytes(t) for t in values(headers)),surface_bytes,o)
+    resources=grid3d_memory_guard(nodes,length(phases)*length(stations),maximum(grid3d_input_bytes(t) for t in values(headers)),surface_bytes,o)
     g=FMM3D.Grid3D((collect(range(lo[a],hi[a];length=dims[a])) for a in 1:3)...)
     surface=read_surface3d(surface_file,g)
     project(x,y)=projected_xy_jacobian(h.projection,x,y,state.ref_lat,state.ref_lon,state.ref_radius_m)
@@ -152,7 +161,8 @@ function prepare_travel_time_3d(cfg,stations,catalog,state;force_build=false)
     isempty(surface_file)||push!(inputs,surface_file)
     identity=Dict{String,Any}("format_version"=>1,"byte_order_host"=>string(ENDIAN_BOM),"options"=>o,
         "inputs"=>Dict(abspath(p)=>file_hash3d(p) for p in sort!(unique(inputs))),
-        "implementation"=>Dict(p=>file_hash3d(joinpath(@__DIR__,p)) for p in ("TravelTimes3D.jl","NLLGrids.jl","forward3d/FMM3D.jl","forward3d/Marching.jl")),
+        "implementation"=>Dict(p=>file_hash3d(joinpath(@__DIR__,p)) for p in ("TravelTimes3D.jl","NLLGrids.jl","ASCIIGrids.jl","forward3d/FMM3D.jl","forward3d/Marching.jl")),
+        "coordinate_reference"=>[state.ref_lat,state.ref_lon,state.ref_radius_m],
         "station_names"=>stations.id,"sources"=>[collect(s) for s in sources])
     identity_text=sprint(io->TOML.print(io,identity;sorted=true));key=bytes2hex(sha256(identity_text))
     cache=joinpath(o["cache_dir"],key);manifest=joinpath(cache,"complete.toml")
@@ -165,10 +175,10 @@ function prepare_travel_time_3d(cfg,stations,catalog,state;force_build=false)
         mkpath(cache);isfile(manifest)&&rm(manifest);records=Dict{String,String}()
         open(io->write(io,identity_text),joinpath(cache,"inputs.toml"),"w")
         for phase in phases
-            velocity=format=="nll_velocity" ? sample_nll_velocity(headers[(phase,0)],g,o["model_interpolation"],o["byte_order"]) : nothing
+            velocity=velocity_mode ? sample_velocity3d(headers[(phase,0)],g,o["model_interpolation"],o["byte_order"];sampling=o["model_sampling"]) : nothing
             for j in 1:length(stations)
-                @printf("  %s %s: %s\n",stations.id[j],phase==1 ? "P" : "S",format=="nll_velocity" ? "building FMM field" : "reading TIME grid")
-                times=format=="nll_velocity" ? FMM3D.march(g,velocity,sources[j];accuracy_order=Int(o["accuracy_order"]),surface=surface) :
+                @printf("  %s %s: %s\n",stations.id[j],phase==1 ? "P" : "S",velocity_mode ? "building FMM field" : "reading TIME grid")
+                times=velocity_mode ? FMM3D.march(g,velocity,sources[j];accuracy_order=Int(o["accuracy_order"]),surface=surface) :
                     read_time_field3d(headers[(phase,j)],g,surface,o["byte_order"])
                 field=Float32.(times)
                 # Internal caches are native endian and record the host byte order in their key.
@@ -192,6 +202,12 @@ function prepare_travel_time_3d(cfg,stations,catalog,state;force_build=false)
     end
     metadata=merge(resources,Dict{String,Any}("type"=>"3d","geometry"=>"cartesian","model_format"=>format,
         "cache_dir"=>cache,"cache_key"=>key,"dimensions"=>collect(dims),"spacing_m"=>collect(FMM3D.grid_spacing(g)),
+        "coordinate_reference"=>[state.ref_lat,state.ref_lon,state.ref_radius_m],
+        "input_coordinate_system"=>o["coordinate_system"],
+        "model_sampling"=>format=="nll_velocity" ? o["model_sampling"] : "nodes",
+        "model_projection"=>string(h.projection.kind),
+        "projection_radius_m"=>h.projection.kind==:nll_simple ? NLL_SIMPLE_RADIUS_M : state.ref_radius_m,
+        "projection_origin_rotation"=>[h.projection.latitude,h.projection.longitude,h.projection.rotation],
         "topography_mask"=>surface!==nothing,"phases"=>o["phases"],"accuracy_order"=>Int(o["accuracy_order"])))
     model=TravelTime3D(:cartesian,g,h.projection,fields,valid,state.ref_lat,state.ref_lon,state.ref_radius_m,metadata)
     for i in 1:length(state)

@@ -1,7 +1,8 @@
 # GraphSplit.jl
 
 **Experimental 3D branch.** Fixed 3D velocity models and precomputed NonLinLoc
-travel-time grids are available here. Start with the [3D guide](docs/THREE_DIMENSIONAL_MODELS.md)
+travel-time grids are available here. Regular ASCII latitude/longitude velocity
+grids are also supported ([ASCII template](config/graphsplit_3d_ascii.toml)). Start with the [3D guide](docs/THREE_DIMENSIONAL_MODELS.md)
 and [3D TOML template](config/graphsplit_3d.toml). This work is separate from the
 submitted study; the 1D defaults are retained.
 

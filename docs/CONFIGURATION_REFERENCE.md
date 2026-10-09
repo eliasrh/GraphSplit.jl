@@ -646,15 +646,16 @@ volumes. Queries outside the valid 3D domain are always rejected.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `grid3d.model_format` | `"nll_velocity"` | Build from velocity grids, or use `"nll_time"` for precomputed station TIME grids. |
-| `grid3d.vp_file` | `"vp.mod.hdr"` | P model header; matching `.buf` is required. |
-| `grid3d.vs_file` | `"vs.mod.hdr"` | S model header; required only when S is included in `phases`. |
+| `grid3d.model_format` | `"nll_velocity"` | Build from NLL velocity grids, use `"nll_time"` for precomputed TIME grids, or `"ascii_velocity"` for a complete four-column regular text grid. |
+| `grid3d.vp_file` | `"vp.mod.hdr"` | P model header with matching `.buf`, or the P text file for ASCII input. |
+| `grid3d.vs_file` | `"vs.mod.hdr"` | S model header or ASCII text file; required only when S is included in `phases`. |
 | `grid3d.time_root` | `"time/model"` | Imported TIME filename prefix, followed by `.P.STA.time.hdr` or `.S.STA.time.hdr`. |
-| `grid3d.coordinate_system` | `"header"` | Use the header's SIMPLE geographic transform. `"local"` requires a missing/NONE transform and a manual GraphSplit reference. |
+| `grid3d.coordinate_system` | `"header"` | For NLL: `"header"` uses SIMPLE; `"local"` requires a missing/NONE transform and a manual reference. For ASCII: choose `"geographic"` for lat/lon or `"local"` for x/y; both require a manual reference. |
 | `grid3d.byte_order` | `"little"` | Binary input byte order: `little`, `big` or `native`. The header does not encode byte order. |
 | `grid3d.spacing_m` | `[500.0,500.0,500.0]` | Maximum x/y/z spacing when building from velocity, metres. Imported TIME grids retain their native spacing. |
 | `grid3d.bounds_km` | `[]` | Empty uses the model box. Otherwise give `[xmin,xmax,ymin,ymax,zmin,zmax]` in model coordinates. Must lie inside the velocity model; not supported for TIME imports. |
-| `grid3d.model_interpolation` | `"nearest"` | Transfer input velocity by nearest node, or interpolate reciprocal velocity with `"slowness_linear"`. Only used for velocity models. |
+| `grid3d.model_sampling` | `"cell_centers"` | NLL velocity convention: `"cell_centers"` for Vel2Grid/Vel2Grid3D, excluding padding; `"nodes"` for custom nodal exporters. Ignored for ASCII and TIME, whose values have explicit node positions. |
+| `grid3d.model_interpolation` | `"nearest"` | Transfer input velocity by nearest sample, or interpolate reciprocal velocity with `"slowness_linear"`. Only used for velocity models. |
 | `grid3d.surface_file` | `""` | Optional regular `x_km y_km elevation_m` surface grid. Above-surface nodes cannot be used. Empty treats the whole box as material. |
 | `grid3d.phases` | `["P","S"]` | Build/import these phases for every station in `stations.txt`. Use `["P"]` for a P-only dataset; omit unused stations to reduce storage. |
 | `grid3d.accuracy_order` | `2` | FMM upwind order, 1 or 2; second order falls back where unavailable. Ignored for imported TIME grids. |

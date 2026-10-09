@@ -384,6 +384,7 @@ for retrieval instructions.
 ## Experimental 3D velocity and travel-time grids
 
 The [3D guide](THREE_DIMENSIONAL_MODELS.md) defines the NonLinLoc model and TIME
-inputs, coordinate conventions, surface-file format and cache lifecycle. A
+inputs, the four-column ASCII velocity-grid option, coordinate conventions,
+surface-file format and cache lifecycle. A
 3D run replaces `vm.txt` with the files selected under `[grid3d]`. Catalogs,
 stations and theta inputs keep their existing formats.

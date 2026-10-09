@@ -19,8 +19,8 @@ regular Cartesian grid. It propagates the earliest arrival from a station
 through the supplied velocity model. Reciprocity gives the event-to-station
 travel time. The default uses second-order upwind differences where accepted
 neighbors permit them and first-order differences elsewhere. It is a different
-forward calculation from the 1D fast-sweeping lookup builder. No NonLinLoc,
-GrowClust3D or TomoSplit installation is required.
+forward calculation from the 1D fast-sweeping lookup builder. No NonLinLoc or
+GrowClust3D installation is required.
 
 At each location step, GraphSplit interpolates the time and its three spatial
 derivatives at each event. These derivatives describe how the predicted time
@@ -30,7 +30,7 @@ for the linearized relocation and are stored in the observation arrays as in
 model node; those would be needed for tomography. The event graph, robust
 weights, reference conditions and location solver otherwise work as before.
 
-## Two ways to supply travel times
+## Input choices
 
 1. **Velocity grids:** give P and S NonLinLoc `.hdr`/`.buf` model pairs. GraphSplit
    samples them onto its forward grid and computes the travel-time volumes.
@@ -39,12 +39,105 @@ weights, reference conditions and location solver otherwise work as before.
    [GrowClust3D](https://github.com/dttrugman/GrowClust3D.jl/wiki/Documentation).
    GraphSplit reads these times directly, retaining their native spacing and
    extent. It does not run FMM again or reproduce NonLinLoc's model builder.
+3. **Plain-text velocity grids:** supply four-column ASCII files with
+   latitude/longitude/depth/velocity, or local x/y/depth/velocity. Rows may be
+   unordered, but must form a complete regularly spaced grid. The next section
+   gives an example.
 
-The input formats follow the [NonLinLoc implementation](https://github.com/ut-beg-texnet/NonLinLoc).
+The binary input formats follow the [NonLinLoc implementation](https://github.com/ut-beg-texnet/NonLinLoc).
 This first version supports its **SIMPLE** geographic projection, including
 rotation, or explicitly declared local Cartesian coordinates. Other projections
 are rejected, rather than treated as equivalent. `TIME2D`, anisotropy, converted
 phases, reflected arrivals and spherical propagation are not supported.
+
+## What is in a NonLinLoc grid file?
+
+A NonLinLoc model is **not an ASCII point cloud**. Each pair has:
+
+- A `.hdr` text file with node counts, x/y/z origin, grid spacing, value type,
+  numeric precision and geographic projection. TIME headers also give the
+  station's name and coordinates.
+- A `.buf` binary array, with depth changing fastest, then y, then x. TIME
+  values belong to nodes. Standard NLL velocity values belong to cell centers,
+  with an unused final plane on each axis; see [Layers and grid resolution](#layers-and-grid-resolution).
+
+The regular grid uses projected Cartesian x/y coordinates and positive-down
+z, in kilometres. It does not store latitude and longitude beside every value.
+The geographic origin and rotation in a SIMPLE header tell GraphSplit how to
+place stations and earthquakes on that grid. For example:
+
+```text
+25 23 17 -3.0 -2.75 -0.5 0.25 0.25 0.25 VELOCITY FLOAT
+TRANSFORM SIMPLE LatOrig 64.0 LongOrig -20.0 RotCW 27.0
+```
+
+This describes a 25 × 23 × 17 grid with 250 m spacing, starting at x = −3 km,
+y = −2.75 km and depth = −0.5 km in the rotated model frame. The values are
+P or S velocities in km/s. Imported TIME values are in seconds. P and S
+velocity grids must have the same spatial definition; all TIME grids must also
+agree on that definition.
+
+## A plain-text latitude/longitude velocity model
+
+Use [the ASCII template](../config/graphsplit_3d_ascii.toml). Supply one file per
+phase, with exactly these four columns and explicit units:
+
+```text
+# latitude_deg longitude_deg depth_km velocity_km_s
+64.000 -20.000 -0.5 4.8
+64.000 -20.000  0.5 5.1
+64.000 -19.990 -0.5 4.9
+64.000 -19.990  0.5 5.2
+64.010 -20.000 -0.5 4.8
+64.010 -20.000  0.5 5.1
+64.010 -19.990 -0.5 4.9
+64.010 -19.990  0.5 5.2
+```
+
+This tiny example includes all eight combinations of two latitudes, two
+longitudes and two depths. Real models will have many more nodes. Blank lines
+and `#` comments are allowed; row order does not matter. Set:
+
+```toml
+[travel_time]
+type = "3d"
+
+[grid3d]
+model_format = "ascii_velocity"
+coordinate_system = "geographic"
+vp_file = "vp.txt"
+vs_file = "vs.txt"
+
+[coordinates]
+reference = "manual"
+reference_latitude = 64.0
+reference_longitude = -20.0
+```
+
+Choose an origin near the study area and keep it fixed. Geographic rows are
+converted to GraphSplit's local east/north frame using that origin. This is
+**not** an implicit NonLinLoc SIMPLE conversion: the two formulas have different
+longitude scaling. A catalog and stations in geographic coordinates are
+converted through the same GraphSplit frame. Run metadata records the reference
+and input coordinate convention.
+
+For text rows already in local coordinates, use `coordinate_system = "local"`
+and columns `x_km y_km depth_km velocity_km_s`. The manual reference must describe
+those axes. Depth is always positive down relative to the station-elevation
+datum, not depth below the local land surface. `bounds_km` and a surface file
+remain in model x/y coordinates even when the velocity input is geographic.
+
+The initial ASCII reader requires a **complete regular grid**, with at least
+two nodes per axis. It rejects missing nodes, duplicates, irregular spacing and
+nonpositive velocities. A genuinely scattered point cloud needs a separately
+chosen interpolation method and a coverage rule. Automatically choosing nearest
+neighbors or inverse-distance averaging could fill unsupported areas or smear a
+velocity interface. Grid those data explicitly first; this version does not
+make that scientific choice silently.
+
+The file is scanned for its axes before allocating a dense velocity array.
+The ordinary 3D memory guard then includes the native ASCII model and the
+resampled forward grid. It does not retain a second full list of text rows.
 
 ## Start with a velocity model
 
@@ -89,7 +182,9 @@ vertical datum**. GraphSplit requires `event_vertical = "positive_depth"` and
 elevation has z = −0.8 km, so the model must extend above zero depth.
 
 For a header with `TRANSFORM SIMPLE`, the reader uses the NonLinLoc geographic
-conversion, including its latitude-dependent longitude scale and rotation.
+conversion, including its 6371.0087714 km sphere radius, latitude-dependent
+longitude scale and rotation. This matches current NonLinLoc; files built with
+older/custom geographic constants need to be regenerated or converted explicitly.
 It also transforms the derivatives back into GraphSplit's local east/north
 coordinates. Using the same origin alone is not sufficient to equate the two
 coordinate formulas.
@@ -137,14 +232,25 @@ leave the fixed model domain.
 
 ## Layers and grid resolution
 
-NonLinLoc model files contain values at grid nodes; a sharp layer is represented
-at the resolution of those nodes. `model_interpolation = "nearest"` is the
-default when transferring a model to a different grid. It avoids smoothing a
-velocity jump during this transfer. `"slowness_linear"` interpolates reciprocal
-velocity and is suitable for a smooth model. Neither option preserves a thin
-layer that the forward grid fails to sample. A discontinuity may move by part
-of a cell when grids differ, and the finite-difference solution introduces its
-own discretization error. This is not an interface-fitted ray tracer.
+NonLinLoc's `Vel2Grid` and `Vel2Grid3D` place velocity values at **cell
+centers**, half a spacing beyond the header origin. Their last array plane on
+each axis is unused padding. Travel times instead belong to **grid nodes**.
+The default `model_sampling = "cell_centers"` follows this convention and
+ignores the padding. If another exporter writes velocities at the header's
+node coordinates, set `model_sampling = "nodes"` explicitly. The NLL header
+does not record this distinction. ASCII velocities always belong to their
+listed coordinates, and imported TIME grids are always nodal.
+
+`model_interpolation = "nearest"` transfers the closest velocity sample to
+the FMM grid without blending across a layer boundary. At an exact cell
+boundary, the cell in the positive coordinate direction is selected.
+`"slowness_linear"` interpolates reciprocal velocity and is suitable for a
+smooth model. For cell-centered input, the boundary half-cell retains the
+nearest interior value. Neither method extends outside the model box or uses
+the padding. Neither preserves a thin layer that the FMM grid fails to sample.
+A discontinuity may move by part of a cell when grids differ, and the two
+solvers have different discretization errors. Import existing TIME grids if
+the intention is to retain travel times calculated by NonLinLoc.
 
 Use a grid that samples important layers and terrain, then halve the spacing
 for a smaller test. Compare travel times **and relocated locations**. A coarse
@@ -195,7 +301,8 @@ table, which can be shared by stations with the same elevation sampling.
 
 Before allocating the forward grid, GraphSplit reports retained-field storage
 and a conservative build estimate: `4 N G + 80 N + largest input buffer +
-16 × surface-file bytes`. The extra terms allow for serial FMM work, model
+16 × surface-file bytes`. For ASCII input, the input-buffer allowance is
+16 bytes per native model node, including parsing and occupancy overhead. The extra terms allow for serial FMM work, model
 sampling, masks, conversion and surface parsing. The estimate is deliberately
 conservative for precomputed TIME imports. It excludes Julia's runtime,
 catalogs, observations, location-solver arrays and other applications; it is
@@ -218,3 +325,22 @@ This writes inputs, two run TOMLs, relocated catalogs and error metrics under
 `examples/three_dimensional/generated/`. See the [example guide](../examples/three_dimensional/README.md)
 for the model, noise and test results. This is a known-model recovery test,
 not a comparison of field performance with GrowClust3D or NonLinLoc.
+
+
+## Import and geographic-reference checks
+
+The tests include small P/S velocity and TIME grids generated by NonLinLoc's
+own `Vel2Grid` and `Grid2Time`, using a SIMPLE origin of 64°N, 20°W and a 27°
+rotation. NonLinLoc itself supplies independent projected coordinates and
+interpolated travel times for five geographic test points. GraphSplit imports
+both file types while deliberately using a different internal geographic origin.
+The TIME-import coordinates and interpolated values are checked against those
+independent queries, as are GraphSplit's spatial derivatives. Station-coordinate
+mismatches are rejected.
+
+This verifies actual NonLinLoc files and the supported projection, rather than
+only files written by GraphSplit's test helpers. It does not establish support
+for the other NonLinLoc projections or constitute an end-to-end GrowClust3D run.
+The [fixture notes](../test/fixtures/nll_simple/README.md) identify the source
+version and reproduction commands. Separate tests cover regular ASCII models in
+both geographic and local coordinates.

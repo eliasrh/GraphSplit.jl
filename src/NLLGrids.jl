@@ -99,26 +99,41 @@ function nll_velocity(value,h::NLLHeader3D)
     error("Unsupported NonLinLoc velocity type $(h.kind); use VELOCITY, VELOCITY_METERS, SLOWNESS or SLOW_LEN")
 end
 
-function sample_nll_velocity(h::NLLHeader3D,g::FMM3D.Grid3D,method,byte_order)
+function sample_nll_velocity(h::NLLHeader3D,g::FMM3D.Grid3D,method,byte_order; sampling="cell_centers")
     h.kind in ("VELOCITY","VELOCITY_METERS","SLOWNESS","SLOW_LEN")||error("Expected a velocity/slowness model, not $(h.kind)")
     h.kind=="SLOW_LEN"&&!all(d->isapprox(d,h.spacing_m[1];rtol=1e-10),h.spacing_m)&&
         error("SLOW_LEN requires equal x/y/z spacing; use VELOCITY for unequal spacing")
-    native=nll_grid(h);out=Array{Float64}(undef,size(g))
+    sampling in ("cell_centers","nodes")||error("NLL model_sampling must be cell_centers or nodes")
+    method in ("nearest","slowness_linear")||error("Unknown velocity interpolation method: $method")
+    centered=sampling=="cell_centers"
+    # Vel2Grid samples at +half a cell. The final plane on each axis is
+    # padding, outside the Grid2Time model. TIME fields themselves are nodal.
+    count=ntuple(a->h.dimensions[a]-(centered ? 1 : 0),3)
+    offset=centered ? .5 : 0.
+    domain=nll_grid(h);out=Array{Float64}(undef,size(g))
     with_nll_buffer(h,byte_order) do value
         for k in eachindex(g.z),j in eachindex(g.y),i in eachindex(g.x)
             xyz=(g.x[i],g.y[j],g.z[k])
+            fractional=ntuple(a->begin
+                FMM3D._cell_fraction((domain.x,domain.y,domain.z)[a],xyz[a])
+                # Within the boundary half-cell use its sole adjacent cell
+                # value. The preceding domain check forbids extension outside
+                # the physical model box.
+                clamp((xyz[a]-h.origin_m[a])/h.spacing_m[a]-offset,0.,count[a]-1.)
+            end,3)
             if method=="nearest"
-                indices=ntuple(a->begin
-                    FMM3D._cell_fraction((native.x,native.y,native.z)[a],xyz[a])
-                    clamp(floor(Int,(xyz[a]-h.origin_m[a])/h.spacing_m[a]+.5)+1,1,h.dimensions[a])
-                end,3)
+                indices=ntuple(a->floor(Int,fractional[a]+.5)+1,3)
                 out[i,j,k]=nll_velocity(value(indices...),h)
             else
-                ids,weights,_=FMM3D._interpolation(native,xyz);slow=0.
-                cart=CartesianIndices(h.dimensions)
-                for a in 1:8
-                    weights[a]==0&&continue
-                    q=Tuple(cart[ids[a]]);slow+=weights[a]/nll_velocity(value(q...),h)
+                lower=ntuple(a->floor(Int,fractional[a])+1,3)
+                upper=ntuple(a->min(lower[a]+1,count[a]),3)
+                t=ntuple(a->fractional[a]-(lower[a]-1),3)
+                slow=0.
+                for c in 0:1,b in 0:1,a in 0:1
+                    weight=(a==0 ? 1-t[1] : t[1])*(b==0 ? 1-t[2] : t[2])*(c==0 ? 1-t[3] : t[3])
+                    weight==0&&continue
+                    index=(a==0 ? lower[1] : upper[1],b==0 ? lower[2] : upper[2],c==0 ? lower[3] : upper[3])
+                    slow+=weight/nll_velocity(value(index...),h)
                 end
                 out[i,j,k]=1/slow
             end
@@ -127,17 +142,20 @@ function sample_nll_velocity(h::NLLHeader3D,g::FMM3D.Grid3D,method,byte_order)
     out
 end
 
-"NLL SIMPLE (6371-km sphere, latitude-dependent longitude scale), with chain derivatives."
+# NonLinLoc geo.h AVG_ERAD (GMT Sphere), not GraphSplit's default 6371 km.
+const NLL_SIMPLE_RADIUS_M = 6_371_008.7714
+
+"NLL SIMPLE (GMT sphere, latitude-dependent longitude scale), with chain derivatives."
 function projected_xy_jacobian(p::GridProjection3D,x,y,lat0,lon0,radius)
     p.kind==:local&&return (Float64(x),Float64(y),1.,0.,0.,1.)
     lat,lon=local_xy_to_ll(x,y,lat0,lon0,radius)
     phi=lat*DEG2RAD;delta=atan(sin((lon-p.longitude)*DEG2RAD),cos((lon-p.longitude)*DEG2RAD))
-    rn=6_371_000.;xx=rn*cos(phi)*delta;yy=rn*(lat-p.latitude)*DEG2RAD
+    rn=NLL_SIMPLE_RADIUS_M;xx=rn*cos(phi)*delta;yy=rn*(lat-p.latitude)*DEG2RAD
     s,c=sincos(p.rotation*DEG2RAD);a=rn*cos(phi)/(radius*cos(lat0*DEG2RAD));b=-rn*sin(phi)*delta/radius;d=rn/radius
     (c*xx+s*yy,-s*xx+c*yy,c*a,c*b+s*d,-s*a,-s*b+c*d)
 end
 
-"Write a portable little-endian NLL velocity grid; model arrays are [x,y,z], m/s."
+"Write nodal velocities in little-endian NLL layout; read with model_sampling=nodes. Arrays are [x,y,z], m/s."
 function write_nll_velocity(path::AbstractString,g::FMM3D.Grid3D,velocity;
         latitude=0.,longitude=0.,rotation=0.,local_coordinates=false)
     size(velocity)==size(g)||error("Velocity shape does not match the grid")

@@ -89,7 +89,8 @@ earth_radius_m = 0.0
 
 # Experimental fixed 3D model; ignored unless travel_time.type = "3d".
 [grid3d]
-# nll_velocity builds travel times; nll_time imports existing station TIME grids.
+# nll_velocity builds times; nll_time imports TIME grids. For plain text use
+# ascii_velocity with geographic/local coordinates; see graphsplit_3d_ascii.toml.
 model_format = "nll_velocity"
 vp_file = "vp.mod.hdr"
 vs_file = "vs.mod.hdr"
@@ -102,7 +103,10 @@ byte_order = "little"
 spacing_m = [500.0, 500.0, 500.0]
 # Optional smaller box in MODEL coordinates: [xmin,xmax,ymin,ymax,zmin,zmax], km.
 bounds_km = []
-# nearest retains nodal jumps; slowness_linear is suitable for a smooth model.
+# NLL Vel2Grid uses cell centers; custom nodal models need "nodes".
+# Ignored for ASCII (explicit node coordinates) and TIME (always nodal).
+model_sampling = "cell_centers"
+# nearest retains jumps; slowness_linear is suitable for a smooth model.
 model_interpolation = "nearest"
 # Optional complete regular x_km y_km elevation_m grid. Empty = no air mask.
 surface_file = ""

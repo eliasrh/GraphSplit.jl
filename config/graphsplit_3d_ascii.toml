@@ -1,0 +1,42 @@
+# EXPERIMENTAL: a regular velocity grid in plain text, with one file per phase.
+# Each row: latitude longitude depth_km velocity_km_s. Row order does not matter.
+# Supply every combination of latitude, longitude and depth, with uniform spacing.
+# This input does not interpolate an unstructured/scattered point cloud.
+[io]
+catalog_file = "catalog.txt"
+stations_file = "stations.txt"
+theta_dir = "theta"
+thetastd_dir = "thetastd"
+output_dir = "graphsplit_output_3d"
+
+[travel_time]
+type = "3d"
+geometry = "cartesian"
+
+[grid3d]
+model_format = "ascii_velocity"
+coordinate_system = "geographic"
+vp_file = "vp.txt"
+vs_file = "vs.txt"
+phases = ["P", "S"]
+spacing_m = [500.0, 500.0, 500.0]
+model_interpolation = "nearest"
+# Optional surface is still x_km y_km elevation_m in the local reference below.
+surface_file = ""
+cache_dir = "lookuptable/3d"
+maximum_memory_gib = 4.0
+warning_memory_gib = 1.0
+
+[coordinates]
+reference = "manual"
+# CHANGE these to a point near the model, retaining the same reference for every run.
+reference_latitude = 64.0
+reference_longitude = -20.0
+station_vertical = "depth_from_elevation"
+event_vertical = "positive_depth"
+
+[prelocation]
+max_event_step_m = 500.0
+
+[relocation]
+max_event_step_m = 500.0

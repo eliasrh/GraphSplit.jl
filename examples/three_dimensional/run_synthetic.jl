@@ -80,6 +80,7 @@ function main(out=joinpath(@__DIR__,"generated"))
     cfg["lookup"]["horizontal_step_m"]=100.;cfg["lookup"]["depth_step_m"]=100.;cfg["lookup"]["station_depth_step_m"]=100.
     cfg["lookup"]["maximum_distance_km"]=15.;cfg["lookup"]["minimum_depth_km"]=-.6;cfg["lookup"]["maximum_depth_km"]=7.5
     cfg["lookup"]["depth_margin_km"]=0.
+    cfg["grid3d"]["model_sampling"]="nodes" # This example writes velocities at explicit grid nodes.
     cfg["grid3d"]["coordinate_system"]="local";cfg["grid3d"]["vp_file"]="vp.hdr";cfg["grid3d"]["vs_file"]="vs.hdr"
     cfg["grid3d"]["spacing_m"]=[300.,300.,300.];cfg["grid3d"]["model_interpolation"]="slowness_linear";cfg["grid3d"]["surface_file"]="surface.txt"
     results=Dict{String,Any}("experiment"=>Dict("seed"=>104729,"events"=>n,"stations"=>ns,"potential_noise_std_s"=>noise,

@@ -85,6 +85,7 @@ function default_config()
             "spacing_m" => [500.0, 500.0, 500.0],
             "bounds_km" => Float64[],
             "model_interpolation" => "nearest",
+            "model_sampling" => "cell_centers",
             "surface_file" => "",
             "phases" => ["P", "S"],
             "accuracy_order" => 2,

@@ -62,7 +62,8 @@ equal horizontal/depth scale. Both projections include every event.
   `thetastd/`: the truth, starting catalog, network and observations.
 - `generated/vp.hdr/.buf`, `vs.hdr/.buf`, `surface.txt`: NLL-format velocity
   volumes and terrain grid. These deliberately use local coordinates with an
-  explicit geographic origin in the TOMLs.
+  explicit geographic origin in the TOMLs. Unlike Vel2Grid output, this script
+  writes velocities at nodes and sets `model_sampling = "nodes"` explicitly.
 - `generated/output_one_dimensional/` and `output_three_dimensional/`: standard
   GraphSplit outputs, including catalogs and solver histories.
 - `generated/metrics.toml` and `*_errors.csv`: aggregate and event-level errors.

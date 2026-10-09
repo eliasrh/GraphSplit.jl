@@ -86,3 +86,9 @@ check station elevations and the vertical datum, inspect velocity layers on the
 actual forward grid, compare a subset at finer spacing, and examine every
 boundary warning. Imported TIME grids inherit the assumptions and errors of the
 program that generated them.
+
+The 3D tests also read actual NonLinLoc-generated P/S model and TIME files.
+They compare geographic coordinates and interpolated times with independent
+queries through NonLinLoc, with a rotated grid and a different GraphSplit
+reference origin. Four-column ASCII regular grids are checked in geographic
+and local coordinates; missing or duplicate nodes are rejected.
